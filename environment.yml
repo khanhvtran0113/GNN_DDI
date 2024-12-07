@@ -1,0 +1,11 @@
+name: gnnddi
+channels:
+  - defaults
+dependencies:
+  - python=3.10.
+  - numpy
+  - pytorch
+  - pandas
+  - matplotlib
+  - torch
+  - torch_geometric
