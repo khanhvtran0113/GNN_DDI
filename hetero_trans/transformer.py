@@ -254,7 +254,7 @@ import matplotlib.pyplot as plt
 
 
 def train(dataset, args):
-
+    
     test_loader = loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False)
     # build model
     model = GNNStack(dataset.num_node_features, args.hidden_dim, dataset.num_classes,
@@ -359,6 +359,8 @@ if 'IS_GRADESCOPE_ENV' not in os.environ:
                 dataset = transform(DDI_graph)
             else:
                 raise NotImplementedError("Unknown dataset")
+            
+
             test_accs, losses, best_model, best_acc, test_loader = train(dataset, args)
 
             print("Maximum test set accuracy: {0}".format(max(test_accs)))
