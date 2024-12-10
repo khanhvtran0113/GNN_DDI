@@ -23,6 +23,7 @@ def parse_drugbank_streaming(xml_file):
 
     # Global dictionaries for encoding unique items across all drugs
     global_encoders = {
+        "name": set(),
         "superclass": set(),
         "class": set(),
         "subclass": set(),
@@ -42,6 +43,7 @@ def parse_drugbank_streaming(xml_file):
 
             # Collect desired features
             features = {
+                'name': elem.find('db:name', ns).text if elem.find('db:name', ns) is not None else None,
                 'superclass': elem.find('db:classification/db:superclass', ns).text if elem.find(
                     'db:classification/db:superclass', ns) is not None else None,
                 'class': elem.find('db:classification/db:class', ns).text if elem.find(
@@ -101,7 +103,7 @@ def build_graph(drugs, drug_features, interactions, global_encoders):
     for feature in drug_features:
         # Encode classification features
         classification_vector = torch.tensor(
-            [global_encoders[key][feature[key]] for key in ['superclass', 'class', 'subclass']],
+            [global_encoders[key][feature[key]] for key in ['name', 'superclass', 'class', 'subclass']],
             dtype=torch.long
         )
         # Encode set-based features
