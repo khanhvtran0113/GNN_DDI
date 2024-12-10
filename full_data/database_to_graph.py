@@ -20,6 +20,7 @@ def parse_drugbank_streaming(xml_file):
     drugs = []
     drug_features = []
     interactions = []
+    descriptions = []
 
     # Global dictionaries for encoding unique items across all drugs
     global_encoders = {
@@ -76,7 +77,9 @@ def parse_drugbank_streaming(xml_file):
                     target_id = interaction.find('db:drugbank-id', ns).text
                     description = interaction.find('db:description', ns).text
                     if "increased" in description or "decreased" in description:
-                        interactions.append((drug_id, target_id, description))
+                        if description not in descriptions:
+                            interactions.append((drug_id, target_id, description))
+                            descriptions.append(description)
 
             # Add the drug only if it has interactions
             if any(interaction[0] == drug_id or interaction[1] == drug_id for interaction in interactions):

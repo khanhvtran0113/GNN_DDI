@@ -71,6 +71,16 @@ def sanity_check_graph(graph, feature_encoders):
         decoded_features = decode_node_features(node_features, feature_encoders)
         print(f"Node {i}: {decoded_features}")
 
+    print("\nCheck edges are directed:")
+    print("-" * 40)
+    edge_tensor = graph['drug', 'affects', 'drug'].edge_index
+    # Flip the edge tensor to check for reverse edges
+    reversed_edges = edge_tensor.flip(0)
+    e_tuples = [tuple(pair) for pair in edge_tensor.T.tolist()]
+    r_tuples = [tuple(pair) for pair in reversed_edges.T.tolist()]
+    print(f"Number of overlaps between inverted edges: {sum(1 for item in e_tuples if item in r_tuples)}")
+    print(f"Number of self-referrential edges: {torch.argwhere(edge_tensor[0,:] == edge_tensor[1,:]).size()}")
+
 
 def visualize_graph(graph, max_nodes=100):
     """Visualize a heterogeneous graph using NetworkX."""
@@ -121,7 +131,7 @@ def main():
     sanity_check_graph(graph, feature_encoders)
 
     # Visualize the graph
-    visualize_graph(graph)
+    # visualize_graph(graph)
 
 
 if __name__ == "__main__":
