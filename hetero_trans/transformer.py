@@ -41,6 +41,8 @@ from torch.nn import Parameter, Linear
 from torch_sparse import SparseTensor, set_diag
 from torch_geometric.nn.conv import MessagePassing
 from torch_geometric.utils import remove_self_loops, add_self_loops, softmax, degree
+from torch_geometric.transforms import RandomNodeSplit
+
 
 class GNNStack(torch.nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim, args, emb=False):
@@ -253,10 +255,7 @@ import matplotlib.pyplot as plt
 
 def train(dataset, args):
 
-    print("Node task. test set size:", np.sum(dataset[0]['test_mask'].numpy()))
-    print()
     test_loader = loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False)
-
     # build model
     model = GNNStack(dataset.num_node_features, args.hidden_dim, dataset.num_classes,
                             args)
@@ -337,7 +336,7 @@ class objectview(object):
 
 if 'IS_GRADESCOPE_ENV' not in os.environ:
     for args in [
-        {'model_type': 'GAT', 'dataset': 'cora', 'num_layers': 2, 'heads': 1, 'batch_size': 32, 'hidden_dim': 32, 'dropout': 0.5, 'epochs': 500, 'opt': 'adam', 'opt_scheduler': 'none', 'opt_restart': 0, 'weight_decay': 5e-3, 'lr': 0.01},
+        {'model_type': 'GAT', 'dataset': 'DDI', 'num_layers': 2, 'heads': 1, 'batch_size': 32, 'hidden_dim': 32, 'dropout': 0.5, 'epochs': 500, 'opt': 'adam', 'opt_scheduler': 'none', 'opt_restart': 0, 'weight_decay': 5e-3, 'lr': 0.01},
     ]:
         args = objectview(args)
         for model in ['GAT']:
@@ -351,6 +350,13 @@ if 'IS_GRADESCOPE_ENV' not in os.environ:
 
             if args.dataset == 'cora':
                 dataset = Planetoid(root='/tmp/cora', name='Cora')
+            ## DATASET SPLIT HERE
+            elif args.dataset == 'DDI':
+                DDI_graph = torch.load("/Users/ishaansingh/Downloads/GNN_DDI/full_data/ddi_graph.pt")
+                label = 0 # set all drug labels to be 0
+                DDI_graph['drug'].y = torch.full((DDI_graph['drug'].num_nodes,), label, dtype=torch.long)
+                transform = RandomNodeSplit(split='random', num_train_per_class=60, num_val=0, num_test=19, num_splits=1)
+                dataset = transform(DDI_graph)
             else:
                 raise NotImplementedError("Unknown dataset")
             test_accs, losses, best_model, best_acc, test_loader = train(dataset, args)
