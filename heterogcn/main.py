@@ -1,6 +1,5 @@
 import torch
 import copy
-import networkx as nx
 import deepsnap
 import numpy as np
 import torch.nn as nn
@@ -35,14 +34,12 @@ class HeteroGNNConv(pyg_nn.MessagePassing):
         self.lin_update = nn.Linear(self.out_channels * 2, self.out_channels, bias=False)
 
     def forward(
-        self,
-        node_feature_src,
-        node_feature_dst,
-        edge_index,
-        size=None
+            self,
+            x,  # Node features for destination nodes
+            edge_index,
+            size=None
     ):
-
-        return self.propagate(edge_index=edge_index, size=size, node_feature_src=node_feature_src, node_feature_dst=node_feature_dst)
+        return self.propagate(edge_index=edge_index, size=size, x=x.float())
 
     def message_and_aggregate(self, edge_index, node_feature_src):
         out = matmul(edge_index, node_feature_src, reduce=self.aggr)
@@ -76,7 +73,7 @@ class HeteroGNNWrapperConv(deepsnap.hetero_gnn.HeteroConv):
             ##########################################
 
     def reset_parameters(self):
-        super(HeteroConvWrapper, self).reset_parameters()
+        super(HeteroGNNWrapperConv, self).reset_parameters()
         if self.aggr == "attn":
             for layer in self.attn_proj.children():
                 layer.reset_parameters()
@@ -128,6 +125,7 @@ class HeteroGNNWrapperConv(deepsnap.hetero_gnn.HeteroConv):
             alpha = alpha.view(M, 1, 1)
             x = x * alpha
             return x.sum(dim=0)
+
 
 def generate_convs(hetero_graph, conv, hidden_size, first_layer=False):
     convs = {}
@@ -184,7 +182,7 @@ class HeteroGNN(torch.nn.Module):
           self.post_mps[node_type] = nn.Linear(self.hidden_size, hetero_graph.num_node_labels(node_type), bias=False)
 
 
-    def forward(self, node_feature, edge_index):
+    def forward(self, node_feature, edge_index, target_edge_index=None):
         x = node_feature
 
         x = self.convs1(x, edge_index)
@@ -204,76 +202,47 @@ class HeteroGNN(torch.nn.Module):
 
         for node_type in preds.keys():
           supervised_indices = indices[node_type]
-          loss += loss_func(preds[node_type][supervised_indices], y[node_type][supervised_indices])
+          loss += loss_func(preds[node_type][supervised_indices].to(dtype=torch.float), y[node_type][supervised_indices].to(dtype=torch.long))
 
         return loss
 
-def train(model, optimizer, hetero_graph, train_idx):
+def train(model, optimizer, hetero_graph, edge_split):
     model.train()
     optimizer.zero_grad()
-    preds = model(hetero_graph.node_feature, hetero_graph.edge_index)
 
-    loss = None
+    # Get predictions for edges
+    edge_index = edge_split["edge_index"]
+    edge_label = edge_split["edge_label"]
+    preds = model(hetero_graph.node_feature, hetero_graph.edge_index, edge_index)
 
-    ############# Your code here #############
-    ## Note:
-    ## 1. Compute the loss here
-    ## 2. `deepsnap.hetero_graph.HeteroGraph.node_label` is useful
-    y = {}
-    indices = {}
-    for node_type in preds.keys():
-      y[node_type] = hetero_graph.node_label[node_type]
-      indices[node_type] = train_idx[node_type]
-
-    loss = model.loss(preds, y, indices)
-
-
-    ##########################################
+    # Compute loss
+    loss_func = F.cross_entropy
+    loss = loss_func(preds, edge_label)
 
     loss.backward()
     optimizer.step()
     return loss.item()
 
-def test(model, graph, indices, best_model=None, best_val=0, save_preds=False, agg_type=None):
+def test(model, graph, edge_split, best_model=None, best_val=0, save_preds=False, agg_type=None):
     model.eval()
     accs = []
-    for i, index in enumerate(indices):
-        preds = model(graph.node_feature, graph.edge_index)
-        num_node_types = 0
-        micro = 0
-        macro = 0
-        for node_type in preds:
-            idx = index[node_type]
-            pred = preds[node_type][idx]
-            pred = pred.max(1)[1]
-            label_np = graph.node_label[node_type][idx].cpu().numpy()
-            pred_np = pred.cpu().numpy()
-            micro = f1_score(label_np, pred_np, average='micro')
-            macro = f1_score(label_np, pred_np, average='macro')
-            num_node_types += 1
 
-        # Averaging f1 score might not make sense, but in our example we only
-        # have one node type
-        micro /= num_node_types
-        macro /= num_node_types
+    for phase in ["train", "val", "test"]:
+        edge_index = edge_split[phase]["edge_index"]
+        edge_label = edge_split[phase]["edge_label"]
+
+        preds = model(graph.node_feature, graph.edge_index, edge_index)
+        pred_classes = preds.max(1)[1]  # Predicted edge types
+
+        # Calculate F1 score
+        micro = f1_score(edge_label.cpu(), pred_classes.cpu(), average='micro')
+        macro = f1_score(edge_label.cpu(), pred_classes.cpu(), average='macro')
         accs.append((micro, macro))
 
-        # Only save the test set predictions and labels!
-        if save_preds and i == 2:
-          print ("Saving Heterogeneous Node Prediction Model Predictions with Agg:", agg_type)
-          print()
-
-          data = {}
-          data['pred'] = pred_np
-          data['label'] = label_np
-
-          df = pd.DataFrame(data=data)
-          # Save locally as csv
-          df.to_csv('ACM-Node-' + agg_type + 'Agg.csv', sep=',', index=False)
-
-    if accs[1][0] > best_val:
+    if accs[1][0] > best_val:  # Save the best validation model
         best_val = accs[1][0]
         best_model = copy.deepcopy(model)
+
     return accs, best_model, best_val
 
 def main():
@@ -286,64 +255,78 @@ def main():
         'attn_size': 32,
     }
 
-    # TODO: Load the data
-    data = None
+    # Load the data
+    file_path = "../full_data/ddi_graph.pt"
+    data = torch.load(file_path)
 
-    # TODO: Load message types from G
+    # Message types
+    message_type = ("drug", "affects", "drug")
 
-    # TODO: Load dictionary of edge indices
-    edge_index = {}
+    # Edge indices and edge attributes
+    edge_index = data["drug", "affects", "drug"].edge_index
+    print(edge_index.shape)
+    edge_attr = data["drug", "affects", "drug"].edge_attr
 
-    # TODO: Load dictionary of node features
-    node_feature = {}
+    # Split edges into train, validation, and test sets
+    num_edges = edge_index.size(1)
+    train_ratio = 0.7
+    val_ratio = 0.15
 
-    # TODO: Load dictionary of node labels
-    node_label = {}
+    torch.manual_seed(42)
+    all_edge_indices = torch.randperm(num_edges)
+    train_size = int(num_edges * train_ratio)
+    val_size = int(num_edges * val_ratio)
 
-    # Load the train, validation and test indices
-    train_idx = None
-    val_idx = None
-    test_idx = None
+    train_edge_idx = all_edge_indices[:train_size]
+    val_edge_idx = all_edge_indices[train_size:train_size + val_size]
+    test_edge_idx = all_edge_indices[train_size + val_size:]
 
-    # Construct a deepsnap tensor backend HeteroGraph
+    # Define train, val, and test edge subsets
+    train_edge_index = edge_index[:, train_edge_idx]
+    val_edge_index = edge_index[:, val_edge_idx]
+    test_edge_index = edge_index[:, test_edge_idx]
+
+    train_edge_label = edge_attr[train_edge_idx]
+    val_edge_label = edge_attr[val_edge_idx]
+    test_edge_label = edge_attr[test_edge_idx]
+
+    # Construct a HeteroGraph
     hetero_graph = HeteroGraph(
-        node_feature=node_feature,
-        node_label=node_label,
-        edge_index=edge_index,
-        directed=True
+        node_feature={"drug": data["drug"].x},
+        edge_index={message_type: edge_index},
+        edge_label={message_type: edge_attr},
+        directed=True,
     )
 
-    print(f"GNN heterogeneous graph: {hetero_graph.num_nodes()} nodes, {hetero_graph.num_edges()} edges")
+    # Move data to the correct device
+    hetero_graph.node_feature["drug"] = hetero_graph.node_feature["drug"].to(args['device'])
+    hetero_graph.edge_index[message_type] = hetero_graph.edge_index[message_type].to(args['device'])
 
-    # Node feature and node label to device
-    for key in hetero_graph.node_feature:
-        hetero_graph.node_feature[key] = hetero_graph.node_feature[key].to(args['device'])
-    for key in hetero_graph.node_label:
-        hetero_graph.node_label[key] = hetero_graph.node_label[key].to(args['device'])
+    # Prepare edge labels and indices for training
+    edge_split = {
+        "train": {"edge_index": train_edge_index.to(args['device']), "edge_label": train_edge_label.to(args['device'])},
+        "val": {"edge_index": val_edge_index.to(args['device']), "edge_label": val_edge_label.to(args['device'])},
+        "test": {"edge_index": test_edge_index.to(args['device']), "edge_label": test_edge_label.to(args['device'])},
+    }
 
-    # Edge_index to sparse tensor and to device
-    for key in hetero_graph.edge_index:
-        edge_index = hetero_graph.edge_index[key]
-        adj = SparseTensor(row=edge_index[0], col=edge_index[1],
-                           sparse_sizes=(hetero_graph.num_nodes('paper'), hetero_graph.num_nodes('paper')))
-        hetero_graph.edge_index[key] = adj.t().to(args['device'])
-
-    best_model = None
-    best_val = 0
-
+    # Model initialization
     model = HeteroGNN(hetero_graph, args, aggr="mean").to(args['device'])
     optimizer = torch.optim.Adam(model.parameters(), lr=args['lr'], weight_decay=args['weight_decay'])
 
+    # Training loop
+    best_model = None
+    best_val = 0
+
     for epoch in range(args['epochs']):
-        loss = train(model, optimizer, hetero_graph, train_idx)
-        accs, best_model, best_val = test(model, hetero_graph, [train_idx, val_idx, test_idx], best_model, best_val)
+        loss = train(model, optimizer, hetero_graph, edge_split["train"])
+        accs, best_model, best_val = test(model, hetero_graph, edge_split, best_model, best_val)
         print(
             f"Epoch {epoch + 1}: loss {round(loss, 5)}, "
             f"train micro {round(accs[0][0] * 100, 2)}%, train macro {round(accs[0][1] * 100, 2)}%, "
             f"valid micro {round(accs[1][0] * 100, 2)}%, valid macro {round(accs[1][1] * 100, 2)}%, "
             f"test micro {round(accs[2][0] * 100, 2)}%, test macro {round(accs[2][1] * 100, 2)}%"
         )
-    best_accs, _, _ = test(best_model, hetero_graph, [train_idx, val_idx, test_idx], save_preds=True, agg_type="Mean")
+    best_accs, _, _ = test(best_model, hetero_graph, edge_split, save_preds=True, agg_type="Mean")
     print(
         f"Best model: "
         f"train micro {round(best_accs[0][0] * 100, 2)}%, train macro {round(best_accs[0][1] * 100, 2)}%, "
