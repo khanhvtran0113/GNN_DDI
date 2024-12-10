@@ -26,7 +26,7 @@ def decode_node_features(node_features, feature_encoders):
     offset = 0
 
     # Decode categorical features
-    for key in ['superclass', 'class', 'subclass']:
+    for key in ['name', 'superclass', 'class', 'subclass']:
         encoder = feature_encoders[key]
         encoded_value = node_features[offset].item()
         decoded[key] = list(encoder.keys())[encoded_value]
