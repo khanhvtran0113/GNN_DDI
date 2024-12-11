@@ -264,11 +264,11 @@ def main():
 
     # Edge indices and edge attributes
     edge_index = data["drug", "affects", "drug"].edge_index
-    print(edge_index.shape)
     edge_attr = data["drug", "affects", "drug"].edge_attr
 
     # Split edges into train, validation, and test sets
     num_edges = edge_index.size(1)
+    print(f"EDGE INDEX SHAPE: {edge_index.shape}")
     train_ratio = 0.7
     val_ratio = 0.15
 
@@ -292,21 +292,21 @@ def main():
 
     # Construct a HeteroGraph
     hetero_graph = HeteroGraph(
-        node_feature={"drug": data["drug"].x},
-        edge_index={message_type: edge_index},
-        edge_label={message_type: edge_attr},
+        node_feature=data["drug"].x,
+        edge_index=edge_index,
+        edge_label=edge_attr,
         directed=True,
     )
 
     # Move data to the correct device
-    hetero_graph.node_feature["drug"] = hetero_graph.node_feature["drug"].to(args['device'])
-    hetero_graph.edge_index[message_type] = hetero_graph.edge_index[message_type].to(args['device'])
+    hetero_graph.node_feature["drug"] = hetero_graph.node_feature["drug"]
+    hetero_graph.edge_index[message_type] = hetero_graph.edge_index[message_type]
 
     # Prepare edge labels and indices for training
     edge_split = {
-        "train": {"edge_index": train_edge_index.to(args['device']), "edge_label": train_edge_label.to(args['device'])},
-        "val": {"edge_index": val_edge_index.to(args['device']), "edge_label": val_edge_label.to(args['device'])},
-        "test": {"edge_index": test_edge_index.to(args['device']), "edge_label": test_edge_label.to(args['device'])},
+        "train": {"edge_index": train_edge_index.to(args['device']), "edge_label": train_edge_label},
+        "val": {"edge_index": val_edge_index.to(args['device']), "edge_label": val_edge_label},
+        "test": {"edge_index": test_edge_index.to(args['device']), "edge_label": test_edge_label},
     }
 
     # Model initialization
