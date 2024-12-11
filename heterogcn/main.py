@@ -9,6 +9,7 @@ import pandas as pd
 from sklearn.metrics import f1_score
 from deepsnap.hetero_graph import HeteroGraph
 from torch_sparse import SparseTensor, matmul
+from torch_geometric.transforms import RandomLinkSplit
 
 class HeteroGNNConv(pyg_nn.MessagePassing):
     def __init__(self, in_channels_src, in_channels_dst, out_channels):
@@ -35,11 +36,12 @@ class HeteroGNNConv(pyg_nn.MessagePassing):
 
     def forward(
             self,
-            x,  # Node features for destination nodes
+            node_feature_src,
+            node_feature_dst,
             edge_index,
             size=None
     ):
-        return self.propagate(edge_index=edge_index, size=size, x=x.float())
+        return self.propagate(edge_index, size=size, node_feature_src=node_feature_src, node_feature_dst=node_feature_dst)
 
     def message_and_aggregate(self, edge_index, node_feature_src):
         out = matmul(edge_index, node_feature_src, reduce=self.aggr)
@@ -80,16 +82,19 @@ class HeteroGNNWrapperConv(deepsnap.hetero_gnn.HeteroConv):
 
     def forward(self, node_features, edge_indices):
         message_type_emb = {}
+
+        print(node_features.keys())
         for message_key, message_type in edge_indices.items():
             src_type, edge_type, dst_type = message_key
+            edge_index = edge_indices[message_key]
             node_feature_src = node_features[src_type]
             node_feature_dst = node_features[dst_type]
-            edge_index = edge_indices[message_key]
             message_type_emb[message_key] = (
                 self.convs[message_key](
                     node_feature_src,
                     node_feature_dst,
                     edge_index,
+                    size=None
                 )
             )
         node_emb = {dst: [] for _, _, dst in message_type_emb.keys()}
@@ -130,14 +135,14 @@ class HeteroGNNWrapperConv(deepsnap.hetero_gnn.HeteroConv):
 def generate_convs(hetero_graph, conv, hidden_size, first_layer=False):
     convs = {}
 
-    # Get all message types
-    message_types = hetero_graph.message_types
+    m_type1 = ("drug", 0, "drug")
+    m_type2 = ("drug", 1, "drug")
+    message_types = [m_type1, m_type2]
 
     for message_type in message_types:
-        src_type, _, dst_type = message_type
         if first_layer:
-          in_channels_src = hetero_graph.num_node_features(src_type)
-          in_channels_dst = hetero_graph.num_node_features(dst_type)
+          in_channels_src = hetero_graph.num_node_features("drug")
+          in_channels_dst = hetero_graph.num_node_features("drug")
         else:
           in_channels_src = hidden_size
           in_channels_dst = hidden_size
@@ -182,29 +187,37 @@ class HeteroGNN(torch.nn.Module):
           self.post_mps[node_type] = nn.Linear(self.hidden_size, hetero_graph.num_node_labels(node_type), bias=False)
 
 
-    def forward(self, node_feature, edge_index, target_edge_index=None):
-        x = node_feature
-
-        x = self.convs1(x, edge_index)
+    def forward(self, node_feature, edge_index, edge_attr=None):
+        # First convolutional layer
+        x = self.convs1(node_feature, edge_index)
         x = deepsnap.hetero_gnn.forward_op(x, self.bns1)
         x = deepsnap.hetero_gnn.forward_op(x, self.relus1)
+
+        # Second convolutional layer
         x = self.convs2(x, edge_index)
         x = deepsnap.hetero_gnn.forward_op(x, self.bns2)
         x = deepsnap.hetero_gnn.forward_op(x, self.relus2)
-        x = deepsnap.hetero_gnn.forward_op(x, self.post_mps)
 
-        return x
+        # Prepare edge embeddings for link prediction
+        edge_embeddings = []
+        for (src, _, dst), edge_idx in edge_index.items():
+            src_features = x[src][edge_idx[0]]  # Source node features
+            dst_features = x[dst][edge_idx[1]]  # Destination node features
+            edge_feature = torch.cat([src_features, dst_features], dim=1)
 
-    def loss(self, preds, y, indices):
+            # If edge_attr is provided, concatenate it as well
+            if edge_attr is not None:
+                edge_attr_features = edge_attr[edge_idx]
+                edge_feature = torch.cat([edge_feature, edge_attr_features], dim=1)
 
-        loss = 0
-        loss_func = F.cross_entropy
+            edge_embeddings.append(edge_feature)
 
-        for node_type in preds.keys():
-          supervised_indices = indices[node_type]
-          loss += loss_func(preds[node_type][supervised_indices].to(dtype=torch.float), y[node_type][supervised_indices].to(dtype=torch.long))
+        # Concatenate all edge embeddings
+        return torch.cat(edge_embeddings, dim=0)
 
-        return loss
+    def loss(self, preds, y, edge_label):
+        loss_func = F.cross_entropy if edge_label.ndim == 1 else F.binary_cross_entropy
+        return loss_func(preds, edge_label)
 
 def train(model, optimizer, hetero_graph, edge_split):
     model.train()
@@ -213,11 +226,10 @@ def train(model, optimizer, hetero_graph, edge_split):
     # Get predictions for edges
     edge_index = edge_split["edge_index"]
     edge_label = edge_split["edge_label"]
-    preds = model(hetero_graph.node_feature, hetero_graph.edge_index, edge_index)
+    preds = model(hetero_graph.node_feature, edge_index)
 
     # Compute loss
-    loss_func = F.cross_entropy
-    loss = loss_func(preds, edge_label)
+    loss = model.loss(preds, edge_label)
 
     loss.backward()
     optimizer.step()
@@ -227,23 +239,25 @@ def test(model, graph, edge_split, best_model=None, best_val=0, save_preds=False
     model.eval()
     accs = []
 
-    for phase in ["train", "val", "test"]:
+    for phase in ["train", "test"]:
         edge_index = edge_split[phase]["edge_index"]
         edge_label = edge_split[phase]["edge_label"]
 
-        preds = model(graph.node_feature, graph.edge_index, edge_index)
-        pred_classes = preds.max(1)[1]  # Predicted edge types
+        preds = model(graph.node_feature, edge_index)
+        pred_classes = preds.max(1)[1]  # Predicted edge types (or binary predictions for existence)
 
         # Calculate F1 score
         micro = f1_score(edge_label.cpu(), pred_classes.cpu(), average='micro')
         macro = f1_score(edge_label.cpu(), pred_classes.cpu(), average='macro')
         accs.append((micro, macro))
 
-    if accs[1][0] > best_val:  # Save the best validation model
-        best_val = accs[1][0]
-        best_model = copy.deepcopy(model)
+    # Compare validation micro F1 score with the best so far
+    if accs[1][0] > best_val:  # If current validation micro F1 is better
+        best_val = accs[1][0]  # Update best validation score
+        best_model = copy.deepcopy(model)  # Save the current model
 
     return accs, best_model, best_val
+
 
 def main():
     args = {
@@ -255,65 +269,75 @@ def main():
         'attn_size': 32,
     }
 
-    # Load the data
     file_path = "../full_data/ddi_graph.pt"
     data = torch.load(file_path)
 
-    # Message types
-    message_type = ("drug", "affects", "drug")
+    # Extract node features and graph structure
+    m_type1 = ("drug", 0, "drug")
+    m_type2 = ("drug", 1, "drug")
+    # Apply RandomLinkSplit to split edges
+    transform = RandomLinkSplit(
+        num_val=0.0,  # 20% of edges for validation
+        num_test=0.2,  # 20% of edges for testing
+        is_undirected=False,  # Adjust based on your graph
+        split_labels=True,  # Generates positive and negative edge labels
+        edge_types=(("drug", "affects", "drug"))
+    )
+    edge_index = {}
+    tt1_idx = torch.argwhere(data["drug", "affects", "drug"].edge_attr == 0)
+    tt2_idx = torch.argwhere(data["drug", "affects", "drug"].edge_attr == 1)
+    edge_index[m_type1] = data["drug", "affects", "drug"].edge_index[:, tt1_idx]
+    edge_index[m_type2] = data["drug", "affects", "drug"].edge_index[:, tt2_idx]
 
-    # Edge indices and edge attributes
-    edge_index = data["drug", "affects", "drug"].edge_index
+    train_data, val_data, test_data = transform(data)
+
+    train_edge_index = {}
+    tt1_idx = torch.argwhere(train_data["drug", "affects", "drug"].edge_attr == 0).squeeze()
+    tt2_idx = torch.argwhere(train_data["drug", "affects", "drug"].edge_attr == 1).squeeze()
+    train_edge_index[m_type1] = train_data["drug", "affects", "drug"].edge_index[:, tt1_idx]
+    train_edge_index[m_type2] = train_data["drug", "affects", "drug"].edge_index[:, tt2_idx]
+
+    test_edge_index = {}
+    tt1_idx = torch.argwhere(test_data["drug", "affects", "drug"].edge_attr == 0).squeeze()
+    tt2_idx = torch.argwhere(test_data["drug", "affects", "drug"].edge_attr == 1).squeeze()
+    test_edge_index[m_type1] = test_data["drug", "affects", "drug"].edge_index[:, tt1_idx]
+    test_edge_index[m_type2] = test_data["drug", "affects", "drug"].edge_index[:, tt2_idx]
+
+    node_feature = data["drug"].x
+    num_nodes = node_feature.size(0)
+
     edge_attr = data["drug", "affects", "drug"].edge_attr
-
-    # Split edges into train, validation, and test sets
-    num_edges = edge_index.size(1)
-    print(f"EDGE INDEX SHAPE: {edge_index.shape}")
-    train_ratio = 0.7
-    val_ratio = 0.15
-
-    torch.manual_seed(42)
-    all_edge_indices = torch.randperm(num_edges)
-    train_size = int(num_edges * train_ratio)
-    val_size = int(num_edges * val_ratio)
-
-    train_edge_idx = all_edge_indices[:train_size]
-    val_edge_idx = all_edge_indices[train_size:train_size + val_size]
-    test_edge_idx = all_edge_indices[train_size + val_size:]
-
-    # Define train, val, and test edge subsets
-    train_edge_index = edge_index[:, train_edge_idx]
-    val_edge_index = edge_index[:, val_edge_idx]
-    test_edge_index = edge_index[:, test_edge_idx]
-
-    train_edge_label = edge_attr[train_edge_idx]
-    val_edge_label = edge_attr[val_edge_idx]
-    test_edge_label = edge_attr[test_edge_idx]
-
     # Construct a HeteroGraph
     hetero_graph = HeteroGraph(
-        node_feature=data["drug"].x,
-        edge_index=edge_index,
-        edge_label=edge_attr,
+        node_feature={"drug": data["drug"].x},
+        edge_index={"drug": edge_index},
+        edge_label={"drug": edge_attr},
         directed=True,
     )
 
-    # Move data to the correct device
-    hetero_graph.node_feature["drug"] = hetero_graph.node_feature["drug"]
-    hetero_graph.edge_index[message_type] = hetero_graph.edge_index[message_type]
+    # train_edge_index = torch.cat([train_edge_index[m_type1], train_edge_index[m_type2]], dim=1)
+    train_edge_label = torch.cat([
+        torch.zeros(train_data["drug", "affects", "drug"].edge_index[:, tt1_idx].size(1), dtype=torch.float),
+        # Type 0 edges
+        torch.ones(train_data["drug", "affects", "drug"].edge_index[:, tt2_idx].size(1), dtype=torch.float)
+        # Type 1 edges
+    ])
+    test_edge_index = torch.cat([test_edge_index[m_type1], test_edge_index[m_type2]], dim=1)
+    test_edge_label = torch.cat([
+        torch.zeros(test_data["drug", "affects", "drug"].edge_index[:, tt1_idx].size(1), dtype=torch.float),
+        # Type 0 edges
+        torch.ones(test_data["drug", "affects", "drug"].edge_index[:, tt2_idx].size(1), dtype=torch.float)
+        # Type 1 edges
+    ])
 
-    # Prepare edge labels and indices for training
     edge_split = {
-        "train": {"edge_index": train_edge_index.to(args['device']), "edge_label": train_edge_label},
-        "val": {"edge_index": val_edge_index.to(args['device']), "edge_label": val_edge_label},
-        "test": {"edge_index": test_edge_index.to(args['device']), "edge_label": test_edge_label},
+        "train": {"edge_index": train_edge_index, "edge_label": train_edge_label},
+        "test": {"edge_index": test_edge_index, "edge_label": test_edge_label},
     }
 
-    # Model initialization
     model = HeteroGNN(hetero_graph, args, aggr="mean").to(args['device'])
     optimizer = torch.optim.Adam(model.parameters(), lr=args['lr'], weight_decay=args['weight_decay'])
 
-    # Training loop
     best_model = None
     best_val = 0
 
@@ -323,16 +347,16 @@ def main():
         print(
             f"Epoch {epoch + 1}: loss {round(loss, 5)}, "
             f"train micro {round(accs[0][0] * 100, 2)}%, train macro {round(accs[0][1] * 100, 2)}%, "
-            f"valid micro {round(accs[1][0] * 100, 2)}%, valid macro {round(accs[1][1] * 100, 2)}%, "
-            f"test micro {round(accs[2][0] * 100, 2)}%, test macro {round(accs[2][1] * 100, 2)}%"
+            f"test micro {round(accs[1][0] * 100, 2)}%, test macro {round(accs[1][1] * 100, 2)}%"
         )
     best_accs, _, _ = test(best_model, hetero_graph, edge_split, save_preds=True, agg_type="Mean")
     print(
         f"Best model: "
         f"train micro {round(best_accs[0][0] * 100, 2)}%, train macro {round(best_accs[0][1] * 100, 2)}%, "
-        f"valid micro {round(best_accs[1][0] * 100, 2)}%, valid macro {round(best_accs[1][1] * 100, 2)}%, "
-        f"test micro {round(best_accs[2][0] * 100, 2)}%, test macro {round(best_accs[2][1] * 100, 2)}%"
+        f"test micro {round(best_accs[1][0] * 100, 2)}%, test macro {round(best_accs[1][1] * 100, 2)}%"
     )
+
+
 
 if __name__ == '__main__':
     main()
