@@ -406,6 +406,7 @@ import torch
 from torch_geometric.utils import negative_sampling
 from torch.nn import functional as F
 from sklearn.metrics import roc_auc_score
+from torch_geometric.transforms import RandomLinkSplit
 
 # Load graph
 DDI_graph = torch.load("/Users/ishaansingh/Downloads/GNN_DDI/full_data/ddi_graph.pt")
@@ -417,12 +418,31 @@ DDI_graph['drug'].y = torch.full((DDI_graph['drug'].num_nodes,), label, dtype=to
 # Extract node features and graph structure
 m_type1 = ("drug", 0, "drug")
 m_type2 = ("drug", 1, "drug")
+# Apply RandomLinkSplit to split edges
+transform = RandomLinkSplit(
+    num_val=0.0,           # 20% of edges for validation
+    num_test=0.2,          # 20% of edges for testing
+    is_undirected=False,   # Adjust based on your graph
+    split_labels=True,     # Generates positive and negative edge labels
+    edge_types = (("drug", "affects", "drug"))
+)
+train_data, val_data, test_data = transform(DDI_graph)
 
-edge_index = {}
-t1_idx = torch.argwhere(DDI_graph["drug", "affects", "drug"].edge_attr == 0)
-t2_idx = torch.argwhere(DDI_graph["drug", "affects", "drug"].edge_attr == 1)
-edge_index[m_type1] = DDI_graph["drug", "affects", "drug"].edge_index[:,t1_idx]
-edge_index[m_type2] = DDI_graph["drug", "affects", "drug"].edge_index[:,t2_idx]
+# Access train, validation, and test splits
+#train_edge_index = train_data.edge_index
+
+train_edge_index = {}
+tt1_idx = torch.argwhere(train_data["drug", "affects", "drug"].edge_attr == 0)
+tt2_idx = torch.argwhere(train_data["drug", "affects", "drug"].edge_attr == 1)
+train_edge_index[m_type1] = train_data["drug", "affects", "drug"].edge_index[:,tt1_idx]
+train_edge_index[m_type2] = train_data["drug", "affects", "drug"].edge_index[:,tt2_idx]
+
+test_edge_index = {}
+tt1_idx = torch.argwhere(test_data["drug", "affects", "drug"].edge_attr == 0)
+tt2_idx = torch.argwhere(test_data["drug", "affects", "drug"].edge_attr == 1)
+test_edge_index[m_type1] = test_data["drug", "affects", "drug"].edge_index[:,tt1_idx]
+test_edge_index[m_type2] = test_data["drug", "affects", "drug"].edge_index[:,tt2_idx]
+
 
 node_feature = DDI_graph["drug"].x
 num_nodes = node_feature.size(0)
@@ -464,14 +484,21 @@ model = HGAT(
 )
 
 # Combine edge indices and assign edge types
-all_edge_index = torch.cat([edge_index[m_type1], edge_index[m_type2]], dim=1)
-all_edge_type = torch.cat([
-    torch.zeros(edge_index[m_type1].size(1), dtype=torch.float),  # Type 0 edges
-    torch.ones(edge_index[m_type2].size(1), dtype=torch.float)   # Type 1 edges
+train_edge_index = torch.cat([train_edge_index[m_type1], train_edge_index[m_type2]], dim=1)
+train_edge_type = torch.cat([
+    torch.zeros(train_data["drug", "affects", "drug"].edge_index[:,tt1_idx].size(1), dtype=torch.float),  # Type 0 edges
+    torch.ones(train_data["drug", "affects", "drug"].edge_index[:,tt2_idx].size(1), dtype=torch.float)   # Type 1 edges
+])
+
+test_edge_index = torch.cat([test_edge_index[m_type1], test_edge_index[m_type2]], dim=1)
+test_edge_type = torch.cat([
+    torch.zeros(test_data["drug", "affects", "drug"].edge_index[:,tt1_idx].size(1), dtype=torch.float),  # Type 0 edges
+    torch.ones(test_data["drug", "affects", "drug"].edge_index[:,tt2_idx].size(1), dtype=torch.float)   # Type 1 edges
 ])
 
 # Edge times (optional; set to zero if not available)
-all_edge_time = torch.zeros(all_edge_index.size(1), dtype=torch.float)
+train_edge_time = torch.zeros(train_edge_index.size(1), dtype=torch.float)
+test_edge_time = torch.zeros(test_edge_index.size(1), dtype=torch.float)
 
 class Matcher(torch.nn.Module):
     def __init__(self, n_hid):
@@ -495,16 +522,16 @@ for epoch in range(100):
     optimizer.zero_grad()
 
     # Forward pass
-    all_edge_index = all_edge_index.squeeze(-1)
-    node_embeddings = model(node_feature.to(dtype=torch.float), node_type.to(dtype=torch.float), all_edge_index.to(dtype=torch.int64), all_edge_type.to(dtype=torch.float), all_edge_time.to(dtype=torch.int64))
+    train_edge_index = train_edge_index.squeeze(-1)
+    node_embeddings = model(node_feature.to(dtype=torch.float), node_type.to(dtype=torch.float), train_edge_index.to(dtype=torch.int64), train_edge_type.to(dtype=torch.float), train_edge_time.to(dtype=torch.int64))
 
     # Positive edges (from the graph)
-    src, dst = all_edge_index
+    src, dst = train_edge_index
     pos_scores = matcher(node_embeddings[src], node_embeddings[dst], pair=True)
 
     # Negative edges (sampled from the graph)
     neg_edge_index = negative_sampling(
-        edge_index=all_edge_index, num_nodes=num_nodes, num_neg_samples=src.size(0)
+        edge_index=train_edge_index, num_nodes=num_nodes, num_neg_samples=src.size(0)
     )
     neg_src, neg_dst = neg_edge_index
     neg_scores = matcher(node_embeddings[neg_src], node_embeddings[neg_dst], pair=True)
@@ -524,8 +551,9 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 
 model.eval()
 with torch.no_grad():
+    test_edge_index = test_edge_index.squeeze(-1)
     # Forward pass
-    node_embeddings = model(node_feature.to(dtype=torch.float), node_type.to(dtype=torch.float), all_edge_index.to(dtype=torch.int64), all_edge_type.to(dtype=torch.float), all_edge_time.to(dtype=torch.int64))
+    node_embeddings = model(node_feature.to(dtype=torch.float), node_type.to(dtype=torch.float), test_edge_index.to(dtype=torch.int64), test_edge_type.to(dtype=torch.float), test_edge_time.to(dtype=torch.int64))
 
     # Positive and negative edge scores
     pos_scores = matcher(node_embeddings[src], node_embeddings[dst], pair=True)
