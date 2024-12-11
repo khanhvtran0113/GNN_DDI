@@ -1,9 +1,23 @@
 name: gnnddi
 channels:
   - defaults
+  - conda-forge
 dependencies:
-  - python=3.10.
+  - python=3.10
   - numpy
+  - scipy
+  - tqdm
+  - nltk
+  - lxml=5.2.1
+  - tensorboard
   - pytorch
-  - pandas
-  - matplotlib
+  - torchvision
+  - pip
+  - pip:
+      - pybind11
+      - ninja
+      - torch-scatter
+      - torch-sparse
+      - torch-cluster
+      - torch-spline-conv
+      - torch-geometric

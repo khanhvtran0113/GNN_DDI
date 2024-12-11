@@ -427,21 +427,30 @@ transform = RandomLinkSplit(
     edge_types = (("drug", "affects", "drug"))
 )
 train_data, val_data, test_data = transform(DDI_graph)
-
-# Access train, validation, and test splits
-#train_edge_index = train_data.edge_index
-
 train_edge_index = {}
 tt1_idx = torch.argwhere(train_data["drug", "affects", "drug"].edge_attr == 0)
 tt2_idx = torch.argwhere(train_data["drug", "affects", "drug"].edge_attr == 1)
-train_edge_index[m_type1] = train_data["drug", "affects", "drug"].edge_index[:,tt1_idx]
-train_edge_index[m_type2] = train_data["drug", "affects", "drug"].edge_index[:,tt2_idx]
+num_tt1 = len(tt1_idx)
+num_tt2 = len(tt2_idx)
+perm = torch.randperm(num_tt1)
+perm2 = torch.randperm(num_tt2)
+# Define split size
+train_size = int(num_tt1 * 0.8)
+train_size2 = int(num_tt2 * .8)
+# Split into 80% train and 20% test
+train_tt1_idx = tt1_idx[perm[:train_size]]
+test_tt1_idx = tt1_idx[perm[train_size:]]
+train_tt2_idx = tt2_idx[perm2[:train_size2]]
+test_tt2_idx = tt2_idx[perm2[train_size2:]]
+
+train_edge_index[m_type1] = train_data["drug", "affects", "drug"].edge_index[:,train_tt1_idx]
+train_edge_index[m_type2] = train_data["drug", "affects", "drug"].edge_index[:,train_tt2_idx]
 
 test_edge_index = {}
-tt1_idx = torch.argwhere(test_data["drug", "affects", "drug"].edge_attr == 0)
-tt2_idx = torch.argwhere(test_data["drug", "affects", "drug"].edge_attr == 1)
-test_edge_index[m_type1] = test_data["drug", "affects", "drug"].edge_index[:,tt1_idx]
-test_edge_index[m_type2] = test_data["drug", "affects", "drug"].edge_index[:,tt2_idx]
+test_edge_index[m_type1] = test_data["drug", "affects", "drug"].edge_index[:,test_tt1_idx]
+test_edge_index[m_type2] = test_data["drug", "affects", "drug"].edge_index[:,test_tt2_idx]
+
+
 
 
 node_feature = DDI_graph["drug"].x
@@ -478,22 +487,22 @@ model = HGAT(
     out_dim=32,                  # Output feature dimension (hidden size)
     num_types=1,                 # One node type
     num_relations=2,             # Two edge types (0 and 1)
-    n_heads=4,                   # Number of attention heads
+    n_heads=2,                   # Number of attention heads
     n_layers=2,                  # Number of GNN layers
-    dropout=0.2
+    dropout=0.05
 )
 
 # Combine edge indices and assign edge types
 train_edge_index = torch.cat([train_edge_index[m_type1], train_edge_index[m_type2]], dim=1)
 train_edge_type = torch.cat([
-    torch.zeros(train_data["drug", "affects", "drug"].edge_index[:,tt1_idx].size(1), dtype=torch.float),  # Type 0 edges
-    torch.ones(train_data["drug", "affects", "drug"].edge_index[:,tt2_idx].size(1), dtype=torch.float)   # Type 1 edges
+    torch.zeros(train_data["drug", "affects", "drug"].edge_index[:,train_tt1_idx].size(1), dtype=torch.float),  # Type 0 edges
+    torch.ones(train_data["drug", "affects", "drug"].edge_index[:,train_tt2_idx].size(1), dtype=torch.float)   # Type 1 edges
 ])
 
 test_edge_index = torch.cat([test_edge_index[m_type1], test_edge_index[m_type2]], dim=1)
 test_edge_type = torch.cat([
-    torch.zeros(test_data["drug", "affects", "drug"].edge_index[:,tt1_idx].size(1), dtype=torch.float),  # Type 0 edges
-    torch.ones(test_data["drug", "affects", "drug"].edge_index[:,tt2_idx].size(1), dtype=torch.float)   # Type 1 edges
+    torch.zeros(test_data["drug", "affects", "drug"].edge_index[:,test_tt1_idx].size(1), dtype=torch.float),  # Type 0 edges
+    torch.ones(test_data["drug", "affects", "drug"].edge_index[:,test_tt2_idx].size(1), dtype=torch.float)   # Type 1 edges
 ])
 
 # Edge times (optional; set to zero if not available)
@@ -515,9 +524,9 @@ class Matcher(torch.nn.Module):
         return torch.matmul(left, right.T) / self.sqrt_hd
 
 matcher = Matcher(32)  # Hidden size matches the output dimension of the GNN
-optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+optimizer = torch.optim.Adam(model.parameters(), lr=0.005)
 
-for epoch in range(100):
+for epoch in range(250):
     model.train()
     optimizer.zero_grad()
 

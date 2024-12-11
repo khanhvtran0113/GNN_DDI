@@ -17,16 +17,21 @@ class RGCNModel(torch.nn.Module):
         
         # Define R-GCN layers
         self.rgcn1 = RGCNConv(in_channels, hidden_channels, num_relations)
-        self.rgcn2 = RGCNConv(hidden_channels, out_channels, num_relations)
+        self.rgcn2 = RGCNConv(hidden_channels, hidden_channels, num_relations)
+        self.rgcn3 = RGCNConv(hidden_channels, hidden_channels, num_relations)
+        self.rgcn4 = RGCNConv(hidden_channels, out_channels, num_relations)
 
     def forward(self, x, edge_index, edge_type):
         # First RGCN layer + activation
         x = x.to(torch.float)
         x = self.rgcn1(x, edge_index, edge_type)
         x = F.relu(x)
-
-        # Second RGCN layer
         x = self.rgcn2(x, edge_index, edge_type)
+        x = F.relu(x)
+        x = self.rgcn3(x, edge_index, edge_type)
+        x = F.relu(x)
+        x = self.rgcn4(x, edge_index, edge_type)
+        # Second RGCN layer
         return F.log_softmax(x, dim=1)
 
 # Example Usage
@@ -121,14 +126,27 @@ train_data, val_data, test_data = transform(DDI_graph)
 train_edge_index = {}
 tt1_idx = torch.argwhere(train_data["drug", "affects", "drug"].edge_attr == 0)
 tt2_idx = torch.argwhere(train_data["drug", "affects", "drug"].edge_attr == 1)
-train_edge_index[m_type1] = train_data["drug", "affects", "drug"].edge_index[:,tt1_idx]
-train_edge_index[m_type2] = train_data["drug", "affects", "drug"].edge_index[:,tt2_idx]
+num_tt1 = len(tt1_idx)
+num_tt2 = len(tt2_idx)
+perm = torch.randperm(num_tt1)
+perm2 = torch.randperm(num_tt2)
+# Define split size
+train_size = int(num_tt1 * 0.8)
+train_size2 = int(num_tt2 * .8)
+# Split into 80% train and 20% test
+train_tt1_idx = tt1_idx[perm[:train_size]]
+test_tt1_idx = tt1_idx[perm[train_size:]]
+train_tt2_idx = tt2_idx[perm2[:train_size2]]
+test_tt2_idx = tt2_idx[perm2[train_size2:]]
+
+train_edge_index[m_type1] = train_data["drug", "affects", "drug"].edge_index[:,train_tt1_idx]
+train_edge_index[m_type2] = train_data["drug", "affects", "drug"].edge_index[:,train_tt2_idx]
 
 test_edge_index = {}
-tt1_idx = torch.argwhere(test_data["drug", "affects", "drug"].edge_attr == 0)
-tt2_idx = torch.argwhere(test_data["drug", "affects", "drug"].edge_attr == 1)
-test_edge_index[m_type1] = test_data["drug", "affects", "drug"].edge_index[:,tt1_idx]
-test_edge_index[m_type2] = test_data["drug", "affects", "drug"].edge_index[:,tt2_idx]
+test_edge_index[m_type1] = test_data["drug", "affects", "drug"].edge_index[:,test_tt1_idx]
+test_edge_index[m_type2] = test_data["drug", "affects", "drug"].edge_index[:,test_tt2_idx]
+
+
 
 
 node_feature = DDI_graph["drug"].x
@@ -141,7 +159,7 @@ from torch.nn import Module
 
 model = RGCNModel(
     in_channels=node_feature.size(1),  # Input feature dimension
-    hidden_channels=32,               # Hidden feature dimension
+    hidden_channels=64,               # Hidden feature dimension
     out_channels=32,                  # Output feature dimension
     num_relations=2                   # Number of relation types
 )
@@ -151,14 +169,14 @@ model = RGCNModel(
 # Combine edge indices and assign edge types
 train_edge_index = torch.cat([train_edge_index[m_type1], train_edge_index[m_type2]], dim=1)
 train_edge_type = torch.cat([
-    torch.zeros(train_data["drug", "affects", "drug"].edge_index[:,tt1_idx].size(1), dtype=torch.float),  # Type 0 edges
-    torch.ones(train_data["drug", "affects", "drug"].edge_index[:,tt2_idx].size(1), dtype=torch.float)   # Type 1 edges
+    torch.zeros(train_data["drug", "affects", "drug"].edge_index[:,train_tt1_idx].size(1), dtype=torch.float),  # Type 0 edges
+    torch.ones(train_data["drug", "affects", "drug"].edge_index[:,train_tt2_idx].size(1), dtype=torch.float)   # Type 1 edges
 ])
 
 test_edge_index = torch.cat([test_edge_index[m_type1], test_edge_index[m_type2]], dim=1)
 test_edge_type = torch.cat([
-    torch.zeros(test_data["drug", "affects", "drug"].edge_index[:,tt1_idx].size(1), dtype=torch.float),  # Type 0 edges
-    torch.ones(test_data["drug", "affects", "drug"].edge_index[:,tt2_idx].size(1), dtype=torch.float)   # Type 1 edges
+    torch.zeros(test_data["drug", "affects", "drug"].edge_index[:,test_tt1_idx].size(1), dtype=torch.float),  # Type 0 edges
+    torch.ones(test_data["drug", "affects", "drug"].edge_index[:,test_tt2_idx].size(1), dtype=torch.float)   # Type 1 edges
 ])
 
 # Edge times (optional; set to zero if not available)
@@ -180,7 +198,7 @@ class Matcher(torch.nn.Module):
         return torch.matmul(left, right.T) / self.sqrt_hd
 
 matcher = Matcher(32)  # Hidden size matches the output dimension of the GNN
-optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+optimizer = torch.optim.Adam(model.parameters(), lr=0.005)
 
 for epoch in range(100):
     model.train()

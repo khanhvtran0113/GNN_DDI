@@ -100,14 +100,25 @@ train_data, val_data, test_data = transform(DDI_graph)
 train_edge_index = {}
 tt1_idx = torch.argwhere(train_data["drug", "affects", "drug"].edge_attr == 0)
 tt2_idx = torch.argwhere(train_data["drug", "affects", "drug"].edge_attr == 1)
-train_edge_index[m_type1] = train_data["drug", "affects", "drug"].edge_index[:,tt1_idx]
-train_edge_index[m_type2] = train_data["drug", "affects", "drug"].edge_index[:,tt2_idx]
+num_tt1 = len(tt1_idx)
+num_tt2 = len(tt2_idx)
+perm = torch.randperm(num_tt1)
+perm2 = torch.randperm(num_tt2)
+# Define split size
+train_size = int(num_tt1 * 0.8)
+train_size2 = int(num_tt2 * .8)
+# Split into 80% train and 20% test
+train_tt1_idx = tt1_idx[perm[:train_size]]
+test_tt1_idx = tt1_idx[perm[train_size:]]
+train_tt2_idx = tt2_idx[perm2[:train_size2]]
+test_tt2_idx = tt2_idx[perm2[train_size2:]]
+
+train_edge_index[m_type1] = train_data["drug", "affects", "drug"].edge_index[:,train_tt1_idx]
+train_edge_index[m_type2] = train_data["drug", "affects", "drug"].edge_index[:,train_tt2_idx]
 
 test_edge_index = {}
-tt1_idx = torch.argwhere(test_data["drug", "affects", "drug"].edge_attr == 0)
-tt2_idx = torch.argwhere(test_data["drug", "affects", "drug"].edge_attr == 1)
-test_edge_index[m_type1] = test_data["drug", "affects", "drug"].edge_index[:,tt1_idx]
-test_edge_index[m_type2] = test_data["drug", "affects", "drug"].edge_index[:,tt2_idx]
+test_edge_index[m_type1] = test_data["drug", "affects", "drug"].edge_index[:,test_tt1_idx]
+test_edge_index[m_type2] = test_data["drug", "affects", "drug"].edge_index[:,test_tt2_idx]
 
 
 node_feature = DDI_graph["drug"].x
@@ -126,19 +137,19 @@ dropout = 0.1
 
 model = ComplExSeHGNN(num_nodes, num_relations, embedding_dim, hidden_dim, dropout)
 matcher = Matcher(hidden_dim)
-optimizer = torch.optim.Adam(model.parameters(), lr=0.1)
+optimizer = torch.optim.Adam(model.parameters(), lr=0.004)
 
 # Combine edge indices and assign edge types
 train_edge_index = torch.cat([train_edge_index[m_type1], train_edge_index[m_type2]], dim=1)
 train_edge_type = torch.cat([
-    torch.zeros(train_data["drug", "affects", "drug"].edge_index[:,tt1_idx].size(1), dtype=torch.float),  # Type 0 edges
-    torch.ones(train_data["drug", "affects", "drug"].edge_index[:,tt2_idx].size(1), dtype=torch.float)   # Type 1 edges
+    torch.zeros(train_data["drug", "affects", "drug"].edge_index[:,train_tt1_idx].size(1), dtype=torch.float),  # Type 0 edges
+    torch.ones(train_data["drug", "affects", "drug"].edge_index[:,train_tt2_idx].size(1), dtype=torch.float)   # Type 1 edges
 ])
 
 test_edge_index = torch.cat([test_edge_index[m_type1], test_edge_index[m_type2]], dim=1)
 test_edge_type = torch.cat([
-    torch.zeros(test_data["drug", "affects", "drug"].edge_index[:,tt1_idx].size(1), dtype=torch.float),  # Type 0 edges
-    torch.ones(test_data["drug", "affects", "drug"].edge_index[:,tt2_idx].size(1), dtype=torch.float)   # Type 1 edges
+    torch.zeros(test_data["drug", "affects", "drug"].edge_index[:,test_tt1_idx].size(1), dtype=torch.float),  # Type 0 edges
+    torch.ones(test_data["drug", "affects", "drug"].edge_index[:,test_tt2_idx].size(1), dtype=torch.float)   # Type 1 edges
 ])
 
 # Edge times (optional; set to zero if not available)
@@ -191,7 +202,6 @@ with torch.no_grad():
     # AUC
     auc = roc_auc_score(labels.cpu(), scores.cpu())
     predictions = (scores > 0.5).cpu().numpy()
-
     # Ground-truth labels
     labels_np = labels.cpu().numpy()
 
@@ -275,5 +285,5 @@ legend_labels = [edge_type_labels[edge_type] for edge_type in sorted(unique_edge
 handles = [plt.Line2D([0], [0], color=color_map[edge_type], lw=2) for edge_type in sorted(unique_edge_types)]
 plt.legend(handles, legend_labels, title="Edge Types", loc="upper right")
 
-plt.title("Drug-Drug Interaction Graph")
+plt.title("Drug-Drug Interaction Graph for SeHGNN-CE")
 plt.show()
