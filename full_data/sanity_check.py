@@ -81,24 +81,27 @@ def sanity_check_graph(graph, feature_encoders):
     print(f"Number of overlaps between inverted edges: {sum(1 for item in e_tuples if item in r_tuples)}")
     print(f"Number of self-referrential edges: {torch.argwhere(edge_tensor[0,:] == edge_tensor[1,:]).size()}")
 
-
 def visualize_graph(graph, max_nodes=100):
-    """Visualize a heterogeneous graph using NetworkX."""
+    """Visualize a heterogeneous graph using NetworkX with colored edge types."""
     print("\nVisualizing Graph...")
 
     # Initialize an empty NetworkX graph
     nx_graph = nx.DiGraph()  # Use DiGraph for directed graphs
 
+    # Define edge colors based on edge types
+    edge_colors_map = {
+        0: 'orange',   # "increases" interactions
+        1: 'blue',    # "decreases" interactions
+    }
+
     # Iterate over edge types in the heterogeneous graph
-    for edge_type in graph.edge_types:
+    for edge_type, edge_label in zip(graph.edge_types, graph['drug', 'affects', 'drug'].edge_attr.tolist()):
         edge_index = graph[edge_type].edge_index
 
-        # Add edges to the NetworkX graph
+        # Add edges to the NetworkX graph with edge_type attribute
         source_nodes, target_nodes = edge_index
-        nx_graph.add_edges_from(zip(source_nodes.tolist(), target_nodes.tolist()), edge_type=edge_type)
-
-    # Convert to undirected if needed
-    nx_graph = nx_graph.to_undirected()
+        edges = list(zip(source_nodes.tolist(), target_nodes.tolist()))
+        nx_graph.add_edges_from(edges, edge_type=edge_label)
 
     # Limit the number of nodes visualized
     if nx_graph.number_of_nodes() > max_nodes:
@@ -106,15 +109,18 @@ def visualize_graph(graph, max_nodes=100):
     else:
         subgraph = nx_graph
 
+    # Assign colors to edges based on their types
+    edge_colors = [edge_colors_map[attr.item()] for attr in graph['drug', 'affects', 'drug'].edge_attr]
+
     # Visualize the graph
-    pos = nx.spring_layout(subgraph, seed=42)  # Use a spring layout for visualization
     plt.figure(figsize=(12, 8))
-    nx.draw(
-        subgraph, pos, with_labels=False, node_size=50, alpha=0.8,
-        edge_color="gray"
+    nx.draw_circular(
+        subgraph, with_labels=True, node_size=1000, alpha=0.8,
+        edge_color=edge_colors, edge_cmap=plt.cm.Blues
     )
-    plt.title("Graph Visualization")
+    plt.title("DrugBank DDI Graph with Colored Edges")
     plt.show()
+
 
 
 
@@ -131,7 +137,7 @@ def main():
     sanity_check_graph(graph, feature_encoders)
 
     # Visualize the graph
-    # visualize_graph(graph)
+    visualize_graph(graph)
 
 
 if __name__ == "__main__":
