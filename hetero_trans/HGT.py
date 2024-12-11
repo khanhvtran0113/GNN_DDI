@@ -559,7 +559,13 @@ with torch.no_grad():
 import matplotlib.pyplot as plt
 import networkx as nx
 from torch_geometric.utils import to_networkx
+import json
 
+with open('/Users/ishaansingh/Downloads/GNN_DDI/full_data/feature_encoders.json', 'r') as f:
+    feature_encoders = json.load(f)
+
+# Reverse the feature encoders for quick lookup
+name_mapping = {v: k for k, v in feature_encoders['name'].items()}  # Specifically for the "name" mapping
 
 # Convert PyG graph to NetworkX
 nx_graph = to_networkx(DDI_graph, edge_attrs=['edge_attr'], to_undirected=False)
@@ -575,17 +581,20 @@ color_map = {edge_type: plt.cm.tab10(i) for i, edge_type in enumerate(unique_edg
 edge_colors = [color_map[edge_types[edge]] for edge in nx_graph.edges]
 
 # Adjust layout and figure size
-pos = nx.shell_layout(nx_graph)  # Use a spring layout for better separation
+pos = nx.spring_layout(nx_graph, k=2.3)  # Use a spring layout for better separation
 plt.figure(figsize=(15, 10))
 
 # Draw nodes
-nx.draw_networkx_nodes(nx_graph, pos, node_size=300, node_color='skyblue')
+nx.draw_networkx_nodes(nx_graph, pos, node_size=900, node_color='skyblue')
 
-# Draw labels
-nx.draw_networkx_labels(nx_graph, pos)
+# Extract node labels (use the mapping from feature_encoders)
+node_labels = {node: name_mapping.get(node, f"Node {node}") for node in nx_graph.nodes}
+
+# Draw node labels
+nx.draw_networkx_labels(nx_graph, pos, labels=node_labels, font_size=4, font_color='black')
 
 # Draw directed edges with curved arrows for bidirectional edges
-arc_rad = 0.2  # Radius of the arc for curved edges
+arc_rad = 0.8  # Radius of the arc for curved edges
 for edge, color in zip(nx_graph.edges, edge_colors):
     if nx_graph.has_edge(edge[1], edge[0]):  # If bidirectional
         nx.draw_networkx_edges(
@@ -594,8 +603,8 @@ for edge, color in zip(nx_graph.edges, edge_colors):
             edge_color=[color],
             connectionstyle=f'arc3,rad={arc_rad}',
             arrowstyle='-|>',
-            arrowsize=15,
-            width=2
+            arrowsize=30,
+            width=1
         )
     else:  # Single direction
         nx.draw_networkx_edges(
@@ -603,8 +612,8 @@ for edge, color in zip(nx_graph.edges, edge_colors):
             edgelist=[edge],
             edge_color=[color],
             arrowstyle='-|>',
-            arrowsize=15,
-            width=2
+            arrowsize=30,
+            width=1
         )
 
 # Create a legend for edge types
@@ -613,5 +622,5 @@ legend_labels = [edge_type_labels[edge_type] for edge_type in sorted(unique_edge
 handles = [plt.Line2D([0], [0], color=color_map[edge_type], lw=2) for edge_type in sorted(unique_edge_types)]
 plt.legend(handles, legend_labels, title="Edge Types", loc="upper right")
 
-plt.title("Directed Graph Visualization with Distinct Arrows")
+plt.title("Drug-Drug Interaction Graph")
 plt.show()

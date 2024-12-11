@@ -35,6 +35,7 @@ print("\nNumber of Edges in (drug, affects, drug):", num_edges)
 def check_bidirectional_edges(edge_index):
     # Convert edge_index to a set of tuples
     edges = set(zip(edge_index[0].tolist(), edge_index[1].tolist()))
+    print(edges)
     # Find reverse edges
     reverse_edges = set(zip(edge_index[1].tolist(), edge_index[0].tolist()))
     # Identify bidirectional edges
@@ -48,7 +49,8 @@ def check_bidirectional_edges(edge_index):
         print("No Bidirectional Edges Found.")
 
 # Run the check on the edge index
-check_bidirectional_edges(edge_index)
+edge_index.is_undirected = False
+#check_bidirectional_edges(edge_index)
 
 # Print metadata
 print("\nGraph Metadata:")
@@ -71,3 +73,31 @@ print("Node labels:", data['drug'].y.unique() if 'y' in data['drug'] else "No la
 # Check available keys in the edge store
 print("\nEdge Store Keys for (drug, affects, drug):")
 print(DDI_graph["drug", "affects", "drug"].keys)
+
+import torch
+
+# Make sure edge_index is properly constructed as a dictionary
+edge_index = {}
+m_type1 = ("drug", 0, "drug")
+m_type2 = ("drug", 1, "drug")
+t1_idx = torch.argwhere(DDI_graph["drug", "affects", "drug"].edge_attr == 0).squeeze()
+t2_idx = torch.argwhere(DDI_graph["drug", "affects", "drug"].edge_attr == 1).squeeze()
+
+edge_index[m_type1] = DDI_graph["drug", "affects", "drug"].edge_index[:, t1_idx]
+edge_index[m_type2] = DDI_graph["drug", "affects", "drug"].edge_index[:, t2_idx]
+
+# # Define a helper function to print edges
+# def print_edges(edge_type, edges):
+#     print(f"\nEdges for edge type {edge_type}:")
+#     # Check if edges tensor is empty
+#     if edges.numel() == 0:
+#         print("No edges found.")
+#         return
+#     # Transpose the edge tensor to get a list of pairs
+#     edges = edges.T.tolist()  # Convert to list of pairs
+#     for edge in edges:
+#         print(f"({edge[0]}, {edge[1]})")
+
+# # Iterate through edge types and print edges
+# for edge_type, edges in edge_index.items():
+#     print_edges(edge_type, edges)
