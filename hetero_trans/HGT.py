@@ -8,6 +8,7 @@ from torch_geometric.nn.inits import glorot, uniform
 from torch_geometric.utils import softmax
 import math
 
+# based on code from the 2021 heterogenous graph attention transformer
 class HGTConv(MessagePassing):
     def __init__(self, in_dim, out_dim, num_types, num_relations, n_heads, dropout = 0.2, use_norm = True, use_RTE = True, **kwargs):
         super(HGTConv, self).__init__(node_dim=0, aggr='add', **kwargs)
@@ -38,9 +39,6 @@ class HGTConv(MessagePassing):
             self.a_linears.append(nn.Linear(out_dim,  out_dim))
             if use_norm:
                 self.norms.append(nn.LayerNorm(out_dim))
-        '''
-            TODO: make relation_pri smaller, as not all <st, rt, tt> pair exist in meta relation list.
-        '''
         self.relation_pri   = nn.Parameter(torch.ones(num_relations, self.n_heads))
         self.relation_att   = nn.Parameter(torch.Tensor(num_relations, n_heads, self.d_k, self.d_k))
         self.relation_msg   = nn.Parameter(torch.Tensor(num_relations, n_heads, self.d_k, self.d_k))
@@ -59,13 +57,7 @@ class HGTConv(MessagePassing):
                             edge_type=edge_type, edge_time = edge_time)
 
     def message(self, edge_index_i, node_inp_i, node_inp_j, node_type_i, node_type_j, edge_type, edge_time):
-        '''
-            j: source, i: target; <j, i>
-        '''
         data_size = edge_index_i.size(0)
-        '''
-            Create Attention and Message tensor beforehand.
-        '''
         res_att     = torch.zeros(data_size, self.n_heads).to(node_inp_i.device)
         res_msg     = torch.zeros(data_size, self.n_heads, self.d_k).to(node_inp_i.device)
         
@@ -77,35 +69,23 @@ class HGTConv(MessagePassing):
                 tb = (node_type_i == int(target_type)) & sb
                 q_linear = self.q_linears[target_type]
                 for relation_type in range(self.num_relations):
-                    '''
-                        idx is all the edges with meta relation <source_type, relation_type, target_type>
-                    '''
                     idx = (edge_type == int(relation_type)) & tb
                     if idx.sum() == 0:
                         continue
-                    '''
-                        Get the corresponding input node representations by idx.
-                        Add tempotal encoding to source representation (j)
-                    '''
+                    
                     target_node_vec = node_inp_i[idx]
                     source_node_vec = node_inp_j[idx]
                     if self.use_RTE:
                         source_node_vec = self.emb(source_node_vec, edge_time[idx])
-                    '''
-                        Step 1: Heterogeneous Mutual Attention
-                    '''
+                    
                     q_mat = q_linear(target_node_vec).view(-1, self.n_heads, self.d_k)
                     k_mat = k_linear(source_node_vec).view(-1, self.n_heads, self.d_k)
                     k_mat = torch.bmm(k_mat.transpose(1,0), self.relation_att[relation_type]).transpose(1,0)
                     res_att[idx] = (q_mat * k_mat).sum(dim=-1) * self.relation_pri[relation_type] / self.sqrt_dk
-                    '''
-                        Step 2: Heterogeneous Message Passing
-                    '''
+                    
                     v_mat = v_linear(source_node_vec).view(-1, self.n_heads, self.d_k)
                     res_msg[idx] = torch.bmm(v_mat.transpose(1,0), self.relation_msg[relation_type]).transpose(1,0)   
-        '''
-            Softmax based on target node's id (edge_index_i). Store attention value in self.att for later visualization.
-        '''
+        
         self.att = softmax(res_att, edge_index_i)
         res = res_msg * self.att.view(-1, self.n_heads, 1)
         del res_att, res_msg
@@ -113,10 +93,7 @@ class HGTConv(MessagePassing):
 
 
     def update(self, aggr_out, node_inp, node_type):
-        '''
-            Step 3: Target-specific Aggregation
-            x = W[node_type] * gelu(Agg(x)) + x
-        '''
+        
         aggr_out = F.gelu(aggr_out)
         res = torch.zeros(aggr_out.size(0), self.out_dim).to(node_inp.device)
         for target_type in range(self.num_types):
@@ -124,9 +101,7 @@ class HGTConv(MessagePassing):
             if idx.sum() == 0:
                 continue
             trans_out = self.drop(self.a_linears[target_type](aggr_out[idx]))
-            '''
-                Add skip connection with learnable weight self.skip[t_id]
-            '''
+            
             alpha = torch.sigmoid(self.skip[target_type])
             if self.use_norm:
                 res[idx] = self.norms[target_type](trans_out * alpha + node_inp[idx] * (1 - alpha))
@@ -172,9 +147,7 @@ class DenseHGTConv(MessagePassing):
             self.a_linears.append(nn.Linear(out_dim,  out_dim))
             if use_norm:
                 self.norms.append(nn.LayerNorm(out_dim))
-        '''
-            TODO: make relation_pri smaller, as not all <st, rt, tt> pair exist in meta relation list.
-        '''
+       
         self.relation_pri   = nn.Parameter(torch.ones(num_relations, self.n_heads))
         self.relation_att   = nn.Parameter(torch.Tensor(num_relations, n_heads, self.d_k, self.d_k))
         self.relation_msg   = nn.Parameter(torch.Tensor(num_relations, n_heads, self.d_k, self.d_k))
@@ -196,15 +169,11 @@ class DenseHGTConv(MessagePassing):
                               edge_type=edge_type, edge_time = edge_time)
 
     def message(self, edge_index_i, node_inp_i, node_inp_j, node_type_i, node_type_j, edge_type, edge_time):
-        '''
-            j: source, i: target; <j, i>
-        '''
+        
         data_size = edge_index_i.size(0)
-        '''
-            Create Attention and Message tensor beforehand.
-        '''
-        res_att     = torch.zeros(data_size, self.n_heads).to(node_inp_i.device)
-        res_msg     = torch.zeros(data_size, self.n_heads, self.d_k).to(node_inp_i.device)
+        
+        res_att = torch.zeros(data_size, self.n_heads).to(node_inp_i.device)
+        res_msg = torch.zeros(data_size, self.n_heads, self.d_k).to(node_inp_i.device)
         
         for source_type in range(self.num_types):
             sb = (node_type_j == int(source_type))
@@ -214,16 +183,11 @@ class DenseHGTConv(MessagePassing):
                 tb = (node_type_i == int(target_type)) & sb
                 q_linear = self.q_linears[target_type]
                 for relation_type in range(self.num_relations):
-                    '''
-                        idx is all the edges with meta relation <source_type, relation_type, target_type>
-                    '''
+                    
                     idx = (edge_type == int(relation_type)) & tb
                     if idx.sum() == 0:
                         continue
-                    '''
-                        Get the corresponding input node representations by idx.
-                        Add tempotal encoding to source representation (j)
-                    '''
+                    
                     target_node_vec = node_inp_i[idx]
                     source_node_vec = node_inp_j[idx]
                     if self.use_RTE:
@@ -240,9 +204,6 @@ class DenseHGTConv(MessagePassing):
                     '''
                     v_mat = v_linear(source_node_vec).view(-1, self.n_heads, self.d_k)
                     res_msg[idx] = torch.bmm(v_mat.transpose(1,0), self.relation_msg[relation_type]).transpose(1,0)   
-        '''
-            Softmax based on target node's id (edge_index_i). Store attention value in self.att for later visualization.
-        '''
         self.att = softmax(res_att, edge_index_i)
         res = res_msg * self.att.view(-1, self.n_heads, 1)
         del res_att, res_msg
@@ -250,26 +211,16 @@ class DenseHGTConv(MessagePassing):
 
 
     def update(self, aggr_out, node_inp, node_type):
-        '''
-            Step 3: Target-specific Aggregation
-            x = W[node_type] * Agg(x) + x
-        '''
+        
         res = torch.zeros(aggr_out.size(0), self.out_dim).to(node_inp.device)
         for target_type in range(self.num_types):
             idx = (node_type == int(target_type))
             if idx.sum() == 0:
                 continue
             trans_out = self.drop(self.a_linears[target_type](aggr_out[idx])) + node_inp[idx]
-            '''
-                Add skip connection with learnable weight self.skip[t_id]
-            '''
+            
             if self.use_norm:
                 trans_out = self.norms[target_type](trans_out)
-                
-            '''
-                Step 4: Shared Dense Layer
-                x = Out_L(gelu(Mid_L(x))) + x
-            '''
                 
             trans_out     = self.drop(self.out_linear(F.gelu(self.mid_linear(trans_out)))) + trans_out
             res[idx]      = self.out_norm(trans_out)
@@ -282,9 +233,6 @@ class DenseHGTConv(MessagePassing):
 
 
 class RelTemporalEncoding(nn.Module):
-    '''
-        Implement the Temporal Encoding (Sinusoid) function.
-    '''
     def __init__(self, n_hid, max_len = 240, dropout = 0.2):
         super(RelTemporalEncoding, self).__init__()
         position = torch.arange(0., max_len).unsqueeze(1)
@@ -336,11 +284,8 @@ class Classifier(nn.Module):
         return '{}(n_hid={}, n_out={})'.format(
             self.__class__.__name__, self.n_hid, self.n_out)
 
+# this is needed for link prediction (what we aer doing)
 class Matcher(nn.Module):
-    '''
-        Matching between a pair of nodes to conduct link prediction.
-        Use multi-head attention as matching model.
-    '''
     def __init__(self, n_hid):
         super(Matcher, self).__init__()
         self.left_linear    = nn.Linear(n_hid,  n_hid)
@@ -350,11 +295,6 @@ class Matcher(nn.Module):
     def forward(self, x, y, infer = False, pair = False):
         ty = self.right_linear(y)
         if infer:
-            '''
-                During testing, we will consider millions or even billions of nodes as candidates (x).
-                It's not possible to calculate them again for different query (y)
-                Since the model is fixed, we propose to cache them, and dirrectly use the results.
-            '''
             if self.cache != None:
                 tx = self.cache
             else:
@@ -402,28 +342,27 @@ class GNN(nn.Module):
             meta_xs = gc(meta_xs, node_type, edge_index, edge_type, edge_time)
         return meta_xs  
 
+# use of this model; needed to be adapted for link prediction. We used the node embeddings from the HGAT for a link prediction task
 import torch
 from torch_geometric.utils import negative_sampling
 from torch.nn import functional as F
 from sklearn.metrics import roc_auc_score
 from torch_geometric.transforms import RandomLinkSplit
 
-# Load graph
 DDI_graph = torch.load("/Users/ishaansingh/Downloads/GNN_DDI/full_data/ddi_graph.pt")
 
-# Assign the same label to all nodes
-label = 0  # Use 0 for all drugs
+label = 0 
 DDI_graph['drug'].y = torch.full((DDI_graph['drug'].num_nodes,), label, dtype=torch.long)
 
-# Extract node features and graph structure
+# connection types
 m_type1 = ("drug", 0, "drug")
 m_type2 = ("drug", 1, "drug")
-# Apply RandomLinkSplit to split edges
+# 80-20 split
 transform = RandomLinkSplit(
-    num_val=0.0,           # 20% of edges for validation
-    num_test=0.2,          # 20% of edges for testing
-    is_undirected=False,   # Adjust based on your graph
-    split_labels=True,     # Generates positive and negative edge labels
+    num_val=0.0,           
+    num_test=0.2,          
+    is_undirected=False, 
+    split_labels=True,    
     edge_types = (("drug", "affects", "drug"))
 )
 train_data, val_data, test_data = transform(DDI_graph)
@@ -434,10 +373,10 @@ num_tt1 = len(tt1_idx)
 num_tt2 = len(tt2_idx)
 perm = torch.randperm(num_tt1)
 perm2 = torch.randperm(num_tt2)
-# Define split size
+
 train_size = int(num_tt1 * 0.8)
 train_size2 = int(num_tt2 * .8)
-# Split into 80% train and 20% test
+
 train_tt1_idx = tt1_idx[perm[:train_size]]
 test_tt1_idx = tt1_idx[perm[train_size:]]
 train_tt2_idx = tt2_idx[perm2[:train_size2]]
@@ -456,7 +395,6 @@ test_edge_index[m_type2] = test_data["drug", "affects", "drug"].edge_index[:,tes
 node_feature = DDI_graph["drug"].x
 num_nodes = node_feature.size(0)
 
-# Node type (all nodes are of the same type)
 node_type = torch.zeros(num_nodes, dtype=torch.long)
 
 from torch.nn import Module
@@ -481,34 +419,32 @@ class HGAT(Module):
     def forward(self, node_feature, node_type, edge_index, edge_type, edge_time):
         return self.gnn(node_feature, node_type, edge_time, edge_index, edge_type)
 
-# Initialize the model
+# hyperparameters for our transformer
 model = HGAT(
-    in_dim=node_feature.size(1),  # Input feature dimension
-    out_dim=32,                  # Output feature dimension (hidden size)
-    num_types=1,                 # One node type
-    num_relations=2,             # Two edge types (0 and 1)
-    n_heads=2,                   # Number of attention heads
-    n_layers=2,                  # Number of GNN layers
+    in_dim=node_feature.size(1),  
+    out_dim=32,                  
+    num_types=1,                 
+    num_relations=2,             
+    n_heads=2,                   
+    n_layers=2,                  
     dropout=0.05
 )
 
-# Combine edge indices and assign edge types
 train_edge_index = torch.cat([train_edge_index[m_type1], train_edge_index[m_type2]], dim=1)
 train_edge_type = torch.cat([
-    torch.zeros(train_data["drug", "affects", "drug"].edge_index[:,train_tt1_idx].size(1), dtype=torch.float),  # Type 0 edges
-    torch.ones(train_data["drug", "affects", "drug"].edge_index[:,train_tt2_idx].size(1), dtype=torch.float)   # Type 1 edges
+    torch.zeros(train_data["drug", "affects", "drug"].edge_index[:,train_tt1_idx].size(1), dtype=torch.float),
+    torch.ones(train_data["drug", "affects", "drug"].edge_index[:,train_tt2_idx].size(1), dtype=torch.float)   
 ])
 
 test_edge_index = torch.cat([test_edge_index[m_type1], test_edge_index[m_type2]], dim=1)
 test_edge_type = torch.cat([
-    torch.zeros(test_data["drug", "affects", "drug"].edge_index[:,test_tt1_idx].size(1), dtype=torch.float),  # Type 0 edges
-    torch.ones(test_data["drug", "affects", "drug"].edge_index[:,test_tt2_idx].size(1), dtype=torch.float)   # Type 1 edges
+    torch.zeros(test_data["drug", "affects", "drug"].edge_index[:,test_tt1_idx].size(1), dtype=torch.float),  
+    torch.ones(test_data["drug", "affects", "drug"].edge_index[:,test_tt2_idx].size(1), dtype=torch.float)   
 ])
 
-# Edge times (optional; set to zero if not available)
 train_edge_time = torch.zeros(train_edge_index.size(1), dtype=torch.float)
 test_edge_time = torch.zeros(test_edge_index.size(1), dtype=torch.float)
-
+# used for link prediction
 class Matcher(torch.nn.Module):
     def __init__(self, n_hid):
         super(Matcher, self).__init__()
@@ -523,33 +459,28 @@ class Matcher(torch.nn.Module):
             return (left * right).sum(dim=-1) / self.sqrt_hd
         return torch.matmul(left, right.T) / self.sqrt_hd
 
-matcher = Matcher(32)  # Hidden size matches the output dimension of the GNN
+matcher = Matcher(32)  
 optimizer = torch.optim.Adam(model.parameters(), lr=0.005)
-
+# training step
 for epoch in range(250):
     model.train()
     optimizer.zero_grad()
 
-    # Forward pass
     train_edge_index = train_edge_index.squeeze(-1)
     node_embeddings = model(node_feature.to(dtype=torch.float), node_type.to(dtype=torch.float), train_edge_index.to(dtype=torch.int64), train_edge_type.to(dtype=torch.float), train_edge_time.to(dtype=torch.int64))
 
-    # Positive edges (from the graph)
     src, dst = train_edge_index
     pos_scores = matcher(node_embeddings[src], node_embeddings[dst], pair=True)
 
-    # Negative edges (sampled from the graph)
     neg_edge_index = negative_sampling(
         edge_index=train_edge_index, num_nodes=num_nodes, num_neg_samples=src.size(0)
     )
     neg_src, neg_dst = neg_edge_index
     neg_scores = matcher(node_embeddings[neg_src], node_embeddings[neg_dst], pair=True)
 
-    # Labels: 1 for positive edges, 0 for negative edges
     labels = torch.cat([torch.ones_like(pos_scores), torch.zeros_like(neg_scores)])
     scores = torch.cat([pos_scores, neg_scores])
 
-    # Loss: Binary Cross-Entropy
     loss = F.binary_cross_entropy_with_logits(scores, labels)
     loss.backward()
     optimizer.step()
@@ -558,34 +489,28 @@ for epoch in range(250):
 
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 
+# evaluation step
 model.eval()
 with torch.no_grad():
     test_edge_index = test_edge_index.squeeze(-1)
-    # Forward pass
     node_embeddings = model(node_feature.to(dtype=torch.float), node_type.to(dtype=torch.float), test_edge_index.to(dtype=torch.int64), test_edge_type.to(dtype=torch.float), test_edge_time.to(dtype=torch.int64))
 
-    # Positive and negative edge scores
     pos_scores = matcher(node_embeddings[src], node_embeddings[dst], pair=True)
     neg_scores = matcher(node_embeddings[neg_src], node_embeddings[neg_dst], pair=True)
 
-    # Labels and scores
     labels = torch.cat([torch.ones_like(pos_scores), torch.zeros_like(neg_scores)])
     scores = torch.cat([pos_scores, neg_scores])
 
-    # AUC
     auc = roc_auc_score(labels.cpu(), scores.cpu())
     predictions = (scores > 0.5).cpu().numpy()
 
-    # Ground-truth labels
     labels_np = labels.cpu().numpy()
 
-    # Calculate metrics
     accuracy = accuracy_score(labels_np, predictions)
     precision = precision_score(labels_np, predictions)
     recall = recall_score(labels_np, predictions)
     f1 = f1_score(labels_np, predictions)
 
-    # Print results
     print(f"Test AUC: {auc:.4f}")
     print(f"Accuracy: {accuracy:.4f}")
     print(f"Precision: {precision:.4f}")
@@ -601,39 +526,26 @@ import json
 with open('/Users/ishaansingh/Downloads/GNN_DDI/full_data/feature_encoders.json', 'r') as f:
     feature_encoders = json.load(f)
 
-# Reverse the feature encoders for quick lookup
-name_mapping = {v: k for k, v in feature_encoders['name'].items()}  # Specifically for the "name" mapping
+name_mapping = {v: k for k, v in feature_encoders['name'].items()} 
 
-# Convert PyG graph to NetworkX
 nx_graph = to_networkx(DDI_graph, edge_attrs=['edge_attr'], to_undirected=False)
-
-# Extract edge attributes (edge types)
 edge_types = nx.get_edge_attributes(nx_graph, 'edge_attr')
 
-# Define a color map for each edge type
 unique_edge_types = set(edge_types.values())
 color_map = {edge_type: plt.cm.tab10(i) for i, edge_type in enumerate(unique_edge_types)}
 
-# Assign colors to edges based on their type
 edge_colors = [color_map[edge_types[edge]] for edge in nx_graph.edges]
 
-# Adjust layout and figure size
-pos = nx.spring_layout(nx_graph, k=2.3)  # Use a spring layout for better separation
+pos = nx.spring_layout(nx_graph, k=2.3)  
 plt.figure(figsize=(15, 10))
 
-# Draw nodes
 nx.draw_networkx_nodes(nx_graph, pos, node_size=900, node_color='skyblue')
-
-# Extract node labels (use the mapping from feature_encoders)
 node_labels = {node: name_mapping.get(node, f"Node {node}") for node in nx_graph.nodes}
-
-# Draw node labels
 nx.draw_networkx_labels(nx_graph, pos, labels=node_labels, font_size=4, font_color='black')
 
-# Draw directed edges with curved arrows for bidirectional edges
-arc_rad = 0.8  # Radius of the arc for curved edges
+arc_rad = 0.8  
 for edge, color in zip(nx_graph.edges, edge_colors):
-    if nx_graph.has_edge(edge[1], edge[0]):  # If bidirectional
+    if nx_graph.has_edge(edge[1], edge[0]):  
         nx.draw_networkx_edges(
             nx_graph, pos,
             edgelist=[edge],
@@ -643,7 +555,7 @@ for edge, color in zip(nx_graph.edges, edge_colors):
             arrowsize=30,
             width=1
         )
-    else:  # Single direction
+    else:  
         nx.draw_networkx_edges(
             nx_graph, pos,
             edgelist=[edge],
@@ -653,8 +565,7 @@ for edge, color in zip(nx_graph.edges, edge_colors):
             width=1
         )
 
-# Create a legend for edge types
-edge_type_labels = {0: "Increases", 1: "Decreases"}  # Custom labels for edge types
+edge_type_labels = {0: "Increases", 1: "Decreases"}  
 legend_labels = [edge_type_labels[edge_type] for edge_type in sorted(unique_edge_types)]
 handles = [plt.Line2D([0], [0], color=color_map[edge_type], lw=2) for edge_type in sorted(unique_edge_types)]
 plt.legend(handles, legend_labels, title="Edge Types", loc="upper right")
