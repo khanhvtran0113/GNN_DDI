@@ -46,14 +46,14 @@ class HGTConv(MessagePassing):
         self.drop           = nn.Dropout(dropout)
         
         if self.use_RTE:
-            self.emb            = RelTemporalEncoding(in_dim)
+            self.emb        = RelTemporalEncoding(in_dim)
         
         glorot(self.relation_att)
         glorot(self.relation_msg)
     # forward function    
     def forward(self, node_inp, node_type, edge_index, edge_type, edge_time):
 
-        return self.propagate(edge_index, node_inp=node_inp, node_type=node_type, \
+        return self.propagate(edge_index, node_inp=node_inp, node_type=node_type,
                             edge_type=edge_type, edge_time = edge_time)
     # message function using multi-headed attention as described in paper
     def message(self, edge_index_i, node_inp_i, node_inp_j, node_type_i, node_type_j, edge_type, edge_time):
@@ -228,7 +228,7 @@ from torch.nn import functional as F
 from sklearn.metrics import roc_auc_score
 from torch_geometric.transforms import RandomLinkSplit
 
-DDI_graph = torch.load("/Users/ishaansingh/Downloads/GNN_DDI/full_data/ddi_graph.pt")
+DDI_graph = torch.load("../full_data/ddi_graph.pt")
 
 label = 0 
 DDI_graph['drug'].y = torch.full((DDI_graph['drug'].num_nodes,), label, dtype=torch.long)
@@ -400,7 +400,7 @@ import networkx as nx
 from torch_geometric.utils import to_networkx
 import json
 
-with open('/Users/ishaansingh/Downloads/GNN_DDI/full_data/feature_encoders.json', 'r') as f:
+with open('../full_data/feature_encoders.json', 'r') as f:
     feature_encoders = json.load(f)
 
 name_mapping = {v: k for k, v in feature_encoders['name'].items()} 

@@ -74,8 +74,13 @@ from torch.nn import functional as F
 from sklearn.metrics import roc_auc_score
 from torch_geometric.transforms import RandomLinkSplit
 
+<<<<<<< HEAD:heterogcn/new_gcn.py
 # load in data
 DDI_graph = torch.load("/Users/ishaansingh/Downloads/GNN_DDI/full_data/ddi_graph.pt")
+=======
+DDI_graph = torch.load("../full_data/ddi_graph.pt")
+
+>>>>>>> 71022205177089cde5d4d11e417533fea242f98c:heterogcn/gcn.py
 label = 0  
 DDI_graph['drug'].y = torch.full((DDI_graph['drug'].num_nodes,), label, dtype=torch.long)
 # edge types
@@ -218,8 +223,12 @@ import networkx as nx
 from torch_geometric.utils import to_networkx
 import json
 
+<<<<<<< HEAD:heterogcn/new_gcn.py
 # draw graph
 with open('/Users/ishaansingh/Downloads/GNN_DDI/full_data/feature_encoders.json', 'r') as f:
+=======
+with open('../full_data/feature_encoders.json', 'r') as f:
+>>>>>>> 71022205177089cde5d4d11e417533fea242f98c:heterogcn/gcn.py
     feature_encoders = json.load(f)
 
 name_mapping = {v: k for k, v in feature_encoders['name'].items()}  

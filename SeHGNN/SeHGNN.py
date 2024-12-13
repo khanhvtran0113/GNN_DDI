@@ -65,8 +65,20 @@ class Matcher(torch.nn.Module):
         if pair:
             return (left * right).sum(dim=-1) / self.sqrt_hd
         return torch.matmul(left, right.T) / self.sqrt_hd
+<<<<<<< HEAD
 # load in the processed data
 DDI_graph = torch.load("/Users/ishaansingh/Downloads/GNN_DDI/full_data/ddi_graph.pt")
+=======
+    
+import torch
+from torch_geometric.utils import negative_sampling
+from torch.nn import functional as F
+from sklearn.metrics import roc_auc_score
+from torch_geometric.transforms import RandomLinkSplit
+
+DDI_graph = torch.load("../full_data/ddi_graph.pt")
+
+>>>>>>> 71022205177089cde5d4d11e417533fea242f98c
 label = 0  
 DDI_graph['drug'].y = torch.full((DDI_graph['drug'].num_nodes,), label, dtype=torch.long)
 
@@ -201,8 +213,13 @@ import networkx as nx
 from torch_geometric.utils import to_networkx
 import json
 
+<<<<<<< HEAD
 # code to plot graph (generic for directed heterograph graph)
 with open('/Users/ishaansingh/Downloads/GNN_DDI/full_data/feature_encoders.json', 'r') as f:
+=======
+# code to plot graph (generic for directed heterograph)
+with open('../full_data/feature_encoders.json', 'r') as f:
+>>>>>>> 71022205177089cde5d4d11e417533fea242f98c
     feature_encoders = json.load(f)
 
 name_mapping = {v: k for k, v in feature_encoders['name'].items()} 
