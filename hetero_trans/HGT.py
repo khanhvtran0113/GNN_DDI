@@ -31,7 +31,7 @@ class HGTConv(MessagePassing):
         self.v_linears   = nn.ModuleList()
         self.a_linears   = nn.ModuleList()
         self.norms       = nn.ModuleList()
-        
+        # all the types of edges
         for t in range(num_types):
             self.k_linears.append(nn.Linear(in_dim,   out_dim))
             self.q_linears.append(nn.Linear(in_dim,   out_dim))
@@ -50,12 +50,12 @@ class HGTConv(MessagePassing):
         
         glorot(self.relation_att)
         glorot(self.relation_msg)
-        
+    # forward function    
     def forward(self, node_inp, node_type, edge_index, edge_type, edge_time):
 
         return self.propagate(edge_index, node_inp=node_inp, node_type=node_type, \
                             edge_type=edge_type, edge_time = edge_time)
-
+    # message function using multi-headed attention as described in paper
     def message(self, edge_index_i, node_inp_i, node_inp_j, node_type_i, node_type_j, edge_type, edge_time):
         data_size = edge_index_i.size(0)
         res_att     = torch.zeros(data_size, self.n_heads).to(node_inp_i.device)
@@ -91,7 +91,7 @@ class HGTConv(MessagePassing):
         del res_att, res_msg
         return res.view(-1, self.out_dim)
 
-
+    # transformer attention update function
     def update(self, aggr_out, node_inp, node_type):
         
         aggr_out = F.gelu(aggr_out)
@@ -114,124 +114,8 @@ class HGTConv(MessagePassing):
             self.__class__.__name__, self.in_dim, self.out_dim,
             self.num_types, self.num_relations)
     
-    
-    
-class DenseHGTConv(MessagePassing):
-    def __init__(self, in_dim, out_dim, num_types, num_relations, n_heads, dropout = 0.2, use_norm = True, use_RTE = True, **kwargs):
-        super(DenseHGTConv, self).__init__(node_dim=0, aggr='add', **kwargs)
 
-        self.in_dim        = in_dim
-        self.out_dim       = out_dim
-        self.num_types     = num_types
-        self.num_relations = num_relations
-        self.total_rel     = num_types * num_relations * num_types
-        self.n_heads       = n_heads
-        self.d_k           = out_dim // n_heads
-        self.sqrt_dk       = math.sqrt(self.d_k)
-        self.use_norm      = use_norm
-        self.use_RTE       = use_RTE
-        self.att           = None
-        
-        
-        self.k_linears   = nn.ModuleList()
-        self.q_linears   = nn.ModuleList()
-        self.v_linears   = nn.ModuleList()
-        self.a_linears   = nn.ModuleList()
-        self.norms       = nn.ModuleList()
-
-        
-        for t in range(num_types):
-            self.k_linears.append(nn.Linear(in_dim,   out_dim))
-            self.q_linears.append(nn.Linear(in_dim,   out_dim))
-            self.v_linears.append(nn.Linear(in_dim,   out_dim))
-            self.a_linears.append(nn.Linear(out_dim,  out_dim))
-            if use_norm:
-                self.norms.append(nn.LayerNorm(out_dim))
-       
-        self.relation_pri   = nn.Parameter(torch.ones(num_relations, self.n_heads))
-        self.relation_att   = nn.Parameter(torch.Tensor(num_relations, n_heads, self.d_k, self.d_k))
-        self.relation_msg   = nn.Parameter(torch.Tensor(num_relations, n_heads, self.d_k, self.d_k))
-        self.drop           = nn.Dropout(dropout)
-        
-        if self.use_RTE:
-            self.emb            = RelTemporalEncoding(in_dim)
-        
-        glorot(self.relation_att)
-        glorot(self.relation_msg)
-        
-        
-        self.mid_linear  = nn.Linear(out_dim,  out_dim * 2)
-        self.out_linear  = nn.Linear(out_dim * 2,  out_dim)
-        self.out_norm    = nn.LayerNorm(out_dim)
-        
-    def forward(self, node_inp, node_type, edge_index, edge_type, edge_time):
-        return self.propagate(edge_index, node_inp=node_inp, node_type=node_type, \
-                              edge_type=edge_type, edge_time = edge_time)
-
-    def message(self, edge_index_i, node_inp_i, node_inp_j, node_type_i, node_type_j, edge_type, edge_time):
-        
-        data_size = edge_index_i.size(0)
-        
-        res_att = torch.zeros(data_size, self.n_heads).to(node_inp_i.device)
-        res_msg = torch.zeros(data_size, self.n_heads, self.d_k).to(node_inp_i.device)
-        
-        for source_type in range(self.num_types):
-            sb = (node_type_j == int(source_type))
-            k_linear = self.k_linears[source_type]
-            v_linear = self.v_linears[source_type] 
-            for target_type in range(self.num_types):
-                tb = (node_type_i == int(target_type)) & sb
-                q_linear = self.q_linears[target_type]
-                for relation_type in range(self.num_relations):
-                    
-                    idx = (edge_type == int(relation_type)) & tb
-                    if idx.sum() == 0:
-                        continue
-                    
-                    target_node_vec = node_inp_i[idx]
-                    source_node_vec = node_inp_j[idx]
-                    if self.use_RTE:
-                        source_node_vec = self.emb(source_node_vec, edge_time[idx])
-                    '''
-                        Step 1: Heterogeneous Mutual Attention
-                    '''
-                    q_mat = q_linear(target_node_vec).view(-1, self.n_heads, self.d_k)
-                    k_mat = k_linear(source_node_vec).view(-1, self.n_heads, self.d_k)
-                    k_mat = torch.bmm(k_mat.transpose(1,0), self.relation_att[relation_type]).transpose(1,0)
-                    res_att[idx] = (q_mat * k_mat).sum(dim=-1) * self.relation_pri[relation_type] / self.sqrt_dk
-                    '''
-                        Step 2: Heterogeneous Message Passing
-                    '''
-                    v_mat = v_linear(source_node_vec).view(-1, self.n_heads, self.d_k)
-                    res_msg[idx] = torch.bmm(v_mat.transpose(1,0), self.relation_msg[relation_type]).transpose(1,0)   
-        self.att = softmax(res_att, edge_index_i)
-        res = res_msg * self.att.view(-1, self.n_heads, 1)
-        del res_att, res_msg
-        return res.view(-1, self.out_dim)
-
-
-    def update(self, aggr_out, node_inp, node_type):
-        
-        res = torch.zeros(aggr_out.size(0), self.out_dim).to(node_inp.device)
-        for target_type in range(self.num_types):
-            idx = (node_type == int(target_type))
-            if idx.sum() == 0:
-                continue
-            trans_out = self.drop(self.a_linears[target_type](aggr_out[idx])) + node_inp[idx]
-            
-            if self.use_norm:
-                trans_out = self.norms[target_type](trans_out)
-                
-            trans_out     = self.drop(self.out_linear(F.gelu(self.mid_linear(trans_out)))) + trans_out
-            res[idx]      = self.out_norm(trans_out)
-        return res
-
-    def __repr__(self):
-        return '{}(in_dim={}, out_dim={}, num_types={}, num_types={})'.format(
-            self.__class__.__name__, self.in_dim, self.out_dim,
-            self.num_types, self.num_relations)
-
-
+# encoding function used
 class RelTemporalEncoding(nn.Module):
     def __init__(self, n_hid, max_len = 240, dropout = 0.2):
         super(RelTemporalEncoding, self).__init__()
@@ -248,15 +132,13 @@ class RelTemporalEncoding(nn.Module):
         return x + self.lin(self.emb(t))
     
     
-    
+# can be used for initializing multiple different types of models    
 class GeneralConv(nn.Module):
     def __init__(self, conv_name, in_hid, out_hid, num_types, num_relations, n_heads, dropout, use_norm = True, use_RTE = True):
         super(GeneralConv, self).__init__()
         self.conv_name = conv_name
         if self.conv_name == 'hgt':
             self.base_conv = HGTConv(in_hid, out_hid, num_types, num_relations, n_heads, dropout, use_norm, use_RTE)
-        elif self.conv_name == 'dense_hgt':
-            self.base_conv = DenseHGTConv(in_hid, out_hid, num_types, num_relations, n_heads, dropout, use_norm, use_RTE)
         elif self.conv_name == 'gcn':
             self.base_conv = GCNConv(in_hid, out_hid)
         elif self.conv_name == 'gat':
@@ -270,7 +152,7 @@ class GeneralConv(nn.Module):
             return self.base_conv(meta_xs, edge_index)
         elif self.conv_name == 'dense_hgt':
             return self.base_conv(meta_xs, node_type, edge_index, edge_type, edge_time)
-
+# classifier function
 class Classifier(nn.Module):
     def __init__(self, n_hid, n_out):
         super(Classifier, self).__init__()
@@ -284,7 +166,7 @@ class Classifier(nn.Module):
         return '{}(n_hid={}, n_out={})'.format(
             self.__class__.__name__, self.n_hid, self.n_out)
 
-# this is needed for link prediction (what we aer doing)
+# this is needed for link prediction (what we are doing)
 class Matcher(nn.Module):
     def __init__(self, n_hid):
         super(Matcher, self).__init__()
@@ -310,10 +192,7 @@ class Matcher(nn.Module):
     def __repr__(self):
         return '{}(n_hid={})'.format(
             self.__class__.__name__, self.n_hid)
-    
-
-
-        
+            
 class GNN(nn.Module):
     def __init__(self, in_dim, n_hid, num_types, num_relations, n_heads, n_layers, dropout = 0.2, conv_name = 'hgt', prev_norm = False, last_norm = False, use_RTE = True):
         super(GNN, self).__init__()
@@ -328,7 +207,7 @@ class GNN(nn.Module):
         for l in range(n_layers - 1):
             self.gcs.append(GeneralConv(conv_name, n_hid, n_hid, num_types, num_relations, n_heads, dropout, use_norm = prev_norm, use_RTE = use_RTE))
         self.gcs.append(GeneralConv(conv_name, n_hid, n_hid, num_types, num_relations, n_heads, dropout, use_norm = last_norm, use_RTE = use_RTE))
-
+# forward function
     def forward(self, node_feature, node_type, edge_time, edge_index, edge_type):
         res = torch.zeros(node_feature.size(0), self.n_hid).to(node_feature.device)
         for t_id in range(self.num_types):
@@ -365,6 +244,7 @@ transform = RandomLinkSplit(
     split_labels=True,    
     edge_types = (("drug", "affects", "drug"))
 )
+# split
 train_data, val_data, test_data = transform(DDI_graph)
 train_edge_index = {}
 tt1_idx = torch.argwhere(train_data["drug", "affects", "drug"].edge_attr == 0)
@@ -388,17 +268,13 @@ train_edge_index[m_type2] = train_data["drug", "affects", "drug"].edge_index[:,t
 test_edge_index = {}
 test_edge_index[m_type1] = test_data["drug", "affects", "drug"].edge_index[:,test_tt1_idx]
 test_edge_index[m_type2] = test_data["drug", "affects", "drug"].edge_index[:,test_tt2_idx]
-
-
-
-
 node_feature = DDI_graph["drug"].x
 num_nodes = node_feature.size(0)
 
 node_type = torch.zeros(num_nodes, dtype=torch.long)
 
 from torch.nn import Module
-
+# intitialize our HGAT
 class HGAT(Module):
     def __init__(self, in_dim, out_dim, num_types, num_relations, n_heads, n_layers, dropout):
         super(HGAT, self).__init__()
@@ -429,7 +305,7 @@ model = HGAT(
     n_layers=2,                  
     dropout=0.05
 )
-
+# set up hetero edges correctly
 train_edge_index = torch.cat([train_edge_index[m_type1], train_edge_index[m_type2]], dim=1)
 train_edge_type = torch.cat([
     torch.zeros(train_data["drug", "affects", "drug"].edge_index[:,train_tt1_idx].size(1), dtype=torch.float),
@@ -502,6 +378,7 @@ with torch.no_grad():
     scores = torch.cat([pos_scores, neg_scores])
 
     auc = roc_auc_score(labels.cpu(), scores.cpu())
+    # map to presence or absence of edges
     predictions = (scores > 0.5).cpu().numpy()
 
     labels_np = labels.cpu().numpy()
@@ -527,7 +404,6 @@ with open('/Users/ishaansingh/Downloads/GNN_DDI/full_data/feature_encoders.json'
     feature_encoders = json.load(f)
 
 name_mapping = {v: k for k, v in feature_encoders['name'].items()} 
-
 nx_graph = to_networkx(DDI_graph, edge_attrs=['edge_attr'], to_undirected=False)
 edge_types = nx.get_edge_attributes(nx_graph, 'edge_attr')
 
@@ -535,14 +411,14 @@ unique_edge_types = set(edge_types.values())
 color_map = {edge_type: plt.cm.tab10(i) for i, edge_type in enumerate(unique_edge_types)}
 
 edge_colors = [color_map[edge_types[edge]] for edge in nx_graph.edges]
-
+# graph layout
 pos = nx.spring_layout(nx_graph, k=2.3)  
 plt.figure(figsize=(15, 10))
 
 nx.draw_networkx_nodes(nx_graph, pos, node_size=900, node_color='skyblue')
 node_labels = {node: name_mapping.get(node, f"Node {node}") for node in nx_graph.nodes}
 nx.draw_networkx_labels(nx_graph, pos, labels=node_labels, font_size=4, font_color='black')
-
+# draw out our graph nicely
 arc_rad = 0.8  
 for edge, color in zip(nx_graph.edges, edge_colors):
     if nx_graph.has_edge(edge[1], edge[0]):  
@@ -569,6 +445,6 @@ edge_type_labels = {0: "Increases", 1: "Decreases"}
 legend_labels = [edge_type_labels[edge_type] for edge_type in sorted(unique_edge_types)]
 handles = [plt.Line2D([0], [0], color=color_map[edge_type], lw=2) for edge_type in sorted(unique_edge_types)]
 plt.legend(handles, legend_labels, title="Edge Types", loc="upper right")
-
+# print it out
 plt.title("Drug-Drug Interaction Graph")
 plt.show()

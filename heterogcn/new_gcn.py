@@ -74,13 +74,15 @@ from torch.nn import functional as F
 from sklearn.metrics import roc_auc_score
 from torch_geometric.transforms import RandomLinkSplit
 
+# load in data
 DDI_graph = torch.load("/Users/ishaansingh/Downloads/GNN_DDI/full_data/ddi_graph.pt")
-
 label = 0  
 DDI_graph['drug'].y = torch.full((DDI_graph['drug'].num_nodes,), label, dtype=torch.long)
-
+# edge types
 m_type1 = ("drug", 0, "drug")
 m_type2 = ("drug", 1, "drug")
+
+# apply our random split
 transform = RandomLinkSplit(
     num_val=0.0,           
     num_test=0.2,          
@@ -89,7 +91,6 @@ transform = RandomLinkSplit(
     edge_types = (("drug", "affects", "drug"))
 )
 train_data, val_data, test_data = transform(DDI_graph)
-
 train_edge_index = {}
 tt1_idx = torch.argwhere(train_data["drug", "affects", "drug"].edge_attr == 0)
 tt2_idx = torch.argwhere(train_data["drug", "affects", "drug"].edge_attr == 1)
@@ -112,26 +113,22 @@ test_edge_index = {}
 test_edge_index[m_type1] = test_data["drug", "affects", "drug"].edge_index[:,test_tt1_idx]
 test_edge_index[m_type2] = test_data["drug", "affects", "drug"].edge_index[:,test_tt2_idx]
 
-
-
-
 node_feature = DDI_graph["drug"].x
 num_nodes = node_feature.size(0)
 
-# Node type (all nodes are of the same type)
+# node type (all nodes are of the same type)
 node_type = torch.zeros(num_nodes, dtype=torch.long)
 
 from torch.nn import Module
 
+# intialize our model and the size of hidden layer
 model = RGCNModel(
     in_channels=node_feature.size(1),  
     hidden_channels=64,               
     out_channels=32,                  
     num_relations=2                   
 )
-
-
-
+# finish processing our split
 train_edge_index = torch.cat([train_edge_index[m_type1], train_edge_index[m_type2]], dim=1)
 train_edge_type = torch.cat([
     torch.zeros(train_data["drug", "affects", "drug"].edge_index[:,train_tt1_idx].size(1), dtype=torch.float),  # Type 0 edges
@@ -147,6 +144,7 @@ test_edge_type = torch.cat([
 train_edge_time = torch.zeros(train_edge_index.size(1), dtype=torch.float)
 test_edge_time = torch.zeros(test_edge_index.size(1), dtype=torch.float)
 
+# matching class
 class Matcher(torch.nn.Module):
     def __init__(self, n_hid):
         super(Matcher, self).__init__()
@@ -164,7 +162,7 @@ class Matcher(torch.nn.Module):
 matcher = Matcher(32)  
 optimizer = torch.optim.Adam(model.parameters(), lr=0.005)
 
-# training loop
+# training loop over 100 iterations
 for epoch in range(100):
     model.train()
     optimizer.zero_grad()
@@ -189,7 +187,7 @@ for epoch in range(100):
 
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 
-# evaluation
+# evaluation segment
 model.eval()
 with torch.no_grad():
     test_edge_index = test_edge_index.squeeze(-1)
@@ -220,6 +218,7 @@ import networkx as nx
 from torch_geometric.utils import to_networkx
 import json
 
+# draw graph
 with open('/Users/ishaansingh/Downloads/GNN_DDI/full_data/feature_encoders.json', 'r') as f:
     feature_encoders = json.load(f)
 
@@ -229,14 +228,13 @@ edge_types = nx.get_edge_attributes(nx_graph, 'edge_attr')
 unique_edge_types = set(edge_types.values())
 color_map = {edge_type: plt.cm.tab10(i) for i, edge_type in enumerate(unique_edge_types)}
 edge_colors = [color_map[edge_types[edge]] for edge in nx_graph.edges]
-
 pos = nx.spring_layout(nx_graph, k=2.3)  
 plt.figure(figsize=(15, 10))
 nx.draw_networkx_nodes(nx_graph, pos, node_size=900, node_color='skyblue')
-
 node_labels = {node: name_mapping.get(node, f"Node {node}") for node in nx_graph.nodes}
 nx.draw_networkx_labels(nx_graph, pos, labels=node_labels, font_size=4, font_color='black')
 
+# fancy things with graph
 arc_rad = 0.8  
 for edge, color in zip(nx_graph.edges, edge_colors):
     if nx_graph.has_edge(edge[1], edge[0]):  
@@ -258,7 +256,8 @@ for edge, color in zip(nx_graph.edges, edge_colors):
             arrowsize=30,
             width=1
         )
-
+        
+# print out graph
 edge_type_labels = {0: "Increases", 1: "Decreases"} 
 legend_labels = [edge_type_labels[edge_type] for edge_type in sorted(unique_edge_types)]
 handles = [plt.Line2D([0], [0], color=color_map[edge_type], lw=2) for edge_type in sorted(unique_edge_types)]

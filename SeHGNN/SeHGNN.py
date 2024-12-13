@@ -2,15 +2,16 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import Linear
-from torch_geometric.nn import MessagePassing
 from torch_geometric.utils import add_self_loops, degree
-
-import torch
-import torch.nn.functional as F
-from torch.nn import Linear
 from torch_geometric.nn import MessagePassing, RGCNConv
 from torch_geometric.utils import add_self_loops, degree
+import torch
+from torch_geometric.utils import negative_sampling
+from torch.nn import functional as F
+from sklearn.metrics import roc_auc_score
+from torch_geometric.transforms import RandomLinkSplit
 
+# declaration for the Complex embedding model of SeHGNN
 class ComplExSeHGNN(torch.nn.Module):
     def __init__(self, num_entities, num_relations, embedding_dim, hidden_dim, dropout):
         super(ComplExSeHGNN, self).__init__()
@@ -31,11 +32,8 @@ class ComplExSeHGNN(torch.nn.Module):
         # linear projection from embedding space to hidden space
         self.fc = nn.Linear(embedding_dim, hidden_dim)
         self.dropout = nn.Dropout(dropout)
-
+    # forward pass through ComplEx and our graph
     def forward(self, head, relation, tail, edge_index, edge_type):
-        """
-        Forward pass through ComplEx and graph structure.
-        """
         # complEx scoring function
         h_real = self.ent_real(head)
         h_imag = self.ent_imag(head)
@@ -53,7 +51,7 @@ class ComplExSeHGNN(torch.nn.Module):
         node_features = self.dropout(torch.relu(node_features))
 
         return score, node_features
-
+# class to link the edges
 class Matcher(torch.nn.Module):
     def __init__(self, n_hid):
         super(Matcher, self).__init__()
@@ -67,15 +65,8 @@ class Matcher(torch.nn.Module):
         if pair:
             return (left * right).sum(dim=-1) / self.sqrt_hd
         return torch.matmul(left, right.T) / self.sqrt_hd
-    
-import torch
-from torch_geometric.utils import negative_sampling
-from torch.nn import functional as F
-from sklearn.metrics import roc_auc_score
-from torch_geometric.transforms import RandomLinkSplit
-
+# load in the processed data
 DDI_graph = torch.load("/Users/ishaansingh/Downloads/GNN_DDI/full_data/ddi_graph.pt")
-
 label = 0  
 DDI_graph['drug'].y = torch.full((DDI_graph['drug'].num_nodes,), label, dtype=torch.long)
 
@@ -92,6 +83,7 @@ transform = RandomLinkSplit(
 )
 train_data, val_data, test_data = transform(DDI_graph)
 
+# finish partitioning train-test split
 train_edge_index = {}
 tt1_idx = torch.argwhere(train_data["drug", "affects", "drug"].edge_attr == 0)
 tt2_idx = torch.argwhere(train_data["drug", "affects", "drug"].edge_attr == 1)
@@ -115,7 +107,6 @@ test_edge_index = {}
 test_edge_index[m_type1] = test_data["drug", "affects", "drug"].edge_index[:,test_tt1_idx]
 test_edge_index[m_type2] = test_data["drug", "affects", "drug"].edge_index[:,test_tt2_idx]
 
-
 node_feature = DDI_graph["drug"].x
 num_nodes = node_feature.size(0)
 
@@ -130,6 +121,7 @@ embedding_dim = 32
 hidden_dim = 32
 dropout = 0.1
 
+# initialize the model
 model = ComplExSeHGNN(num_nodes, num_relations, embedding_dim, hidden_dim, dropout)
 matcher = Matcher(hidden_dim)
 optimizer = torch.optim.Adam(model.parameters(), lr=0.004)
@@ -148,7 +140,7 @@ test_edge_type = torch.cat([
 
 train_edge_time = torch.zeros(train_edge_index.size(1), dtype=torch.float)
 test_edge_time = torch.zeros(test_edge_index.size(1), dtype=torch.float)
-# training
+# training loop over 100 epochs
 for epoch in range(100):
     model.train()
     optimizer.zero_grad()
@@ -174,6 +166,7 @@ for epoch in range(100):
     print(f"Epoch {epoch+1}, Loss: {loss.item():.4f}")
 
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+
 # evaluation part
 model.eval()
 with torch.no_grad():
@@ -208,7 +201,7 @@ import networkx as nx
 from torch_geometric.utils import to_networkx
 import json
 
-# code to plot graph (generic for directed heterograph)
+# code to plot graph (generic for directed heterograph graph)
 with open('/Users/ishaansingh/Downloads/GNN_DDI/full_data/feature_encoders.json', 'r') as f:
     feature_encoders = json.load(f)
 
@@ -228,6 +221,7 @@ nx.draw_networkx_nodes(nx_graph, pos, node_size=900, node_color='skyblue')
 node_labels = {node: name_mapping.get(node, f"Node {node}") for node in nx_graph.nodes}
 nx.draw_networkx_labels(nx_graph, pos, labels=node_labels, font_size=4, font_color='black')
 
+# make graph look fancy
 arc_rad = 0.8  
 for edge, color in zip(nx_graph.edges, edge_colors):
     if nx_graph.has_edge(edge[1], edge[0]):  
@@ -254,5 +248,5 @@ edge_type_labels = {0: "Increases", 1: "Decreases"}
 legend_labels = [edge_type_labels[edge_type] for edge_type in sorted(unique_edge_types)]
 handles = [plt.Line2D([0], [0], color=color_map[edge_type], lw=2) for edge_type in sorted(unique_edge_types)]
 plt.legend(handles, legend_labels, title="Edge Types", loc="upper right")
-plt.title("Drug-Drug Interaction Graph for SeHGNN-CE")
+plt.title("Drug-Drug Interaction Graph for SeHGNN-CE") # graph name
 plt.show()
