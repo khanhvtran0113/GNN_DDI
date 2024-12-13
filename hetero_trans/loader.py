@@ -5,7 +5,7 @@ from torch_geometric.utils import to_networkx
 from torch_geometric.transforms import RandomLinkSplit
 
 
-DDI_graph = torch.load("/Users/ishaansingh/Downloads/GNN_DDI/full_data/ddi_graph.pt")
+DDI_graph = torch.load("../full_data/ddi_graph.pt")
 
 # Assign the same label to all nodes
 label = 0  # Use 0 for all drugs

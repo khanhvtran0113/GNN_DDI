@@ -74,7 +74,7 @@ from torch.nn import functional as F
 from sklearn.metrics import roc_auc_score
 from torch_geometric.transforms import RandomLinkSplit
 
-DDI_graph = torch.load("/Users/ishaansingh/Downloads/GNN_DDI/full_data/ddi_graph.pt")
+DDI_graph = torch.load("../full_data/ddi_graph.pt")
 
 label = 0  
 DDI_graph['drug'].y = torch.full((DDI_graph['drug'].num_nodes,), label, dtype=torch.long)
@@ -209,7 +209,7 @@ from torch_geometric.utils import to_networkx
 import json
 
 # code to plot graph (generic for directed heterograph)
-with open('/Users/ishaansingh/Downloads/GNN_DDI/full_data/feature_encoders.json', 'r') as f:
+with open('../full_data/feature_encoders.json', 'r') as f:
     feature_encoders = json.load(f)
 
 name_mapping = {v: k for k, v in feature_encoders['name'].items()} 

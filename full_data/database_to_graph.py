@@ -4,9 +4,7 @@ import torch
 import json
 
 def encode_items_as_set(feature_items, encoder):
-    """
-    Encodes a list of feature items (e.g., targets, enzymes) into a binary vector.
-    """
+    """Encodes a list of feature items (e.g., targets, enzymes) into a binary vector."""
     vector = torch.zeros(len(encoder), dtype=torch.long)
     for item in feature_items:
         if item in encoder:
@@ -70,7 +68,7 @@ def parse_drugbank_streaming(xml_file):
                 else:
                     global_encoders[key].add(features[key])
 
-            # Check if the drug has any interactions
+            # Check if the drug has any interactions and document interactions
             interactions_elem = elem.find('db:drug-interactions', ns)
             if interactions_elem is not None:
                 for interaction in interactions_elem.findall('db:drug-interaction', ns):
