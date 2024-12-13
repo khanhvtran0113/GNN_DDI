@@ -41,4 +41,8 @@ this model, run gcn.py.
 to easily capture structural information in heterogeneous graphs. This directory contains a model based on this architecture
 with the added adaptation of complEx embeddings. To train/test this model, run SeHGNN.py
 
+### More information
+You can find a Medium draft with a more detailed description of the motivation and model architecture as well as test 
+results at this [link](https://medium.com/@Ishaanksingh/deep-learning-for-drug-drug-interaction-prediction-using-modern-heterogeneous-graph-architectures-d369178299a4)
+
 
